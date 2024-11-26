@@ -15,15 +15,15 @@ pub enum LoraxStage {
 default_struct! {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoraxSettings {
-    // Channels
+
     pub lorax_channel: Option<u64>,
 
-    // Roles
+
     pub lorax_role: Option<u64>,
     pub winner_role: Option<u64>,
     pub alumni_role: Option<u64>,
 
-    // Durations in minutes
+
     pub submission_duration: u64 = 60,
     pub voting_duration: u64 = 30,
     pub tiebreaker_duration: u64 = 15,
@@ -74,8 +74,6 @@ impl LoraxEvent {
             .find(|(_, name)| name.as_str() == tree_name)
             .map(|(uid, _)| *uid)
     }
-
-    // generate_message has been removed as it's now centralized in LoraxEventTask
 }
 
 #[derive(Default, Serialize, Deserialize, Clone)]
@@ -91,46 +89,62 @@ impl LoraxHandler {
         self.read(|db| db.events.get(&guild_id).cloned()).await
     }
 
-    pub async fn submit_tree(&self, guild_id: u64, tree: String, user_id: u64) -> Result<(bool, Option<String>), String> {
+    pub async fn submit_tree(
+        &self,
+        guild_id: u64,
+        tree: String,
+        user_id: u64,
+    ) -> Result<(bool, Option<String>), String> {
         self.write(|db| {
             if let Some(event) = db.events.get_mut(&guild_id) {
                 let is_update = event.tree_submissions.contains_key(&user_id);
                 let old_submission = event.tree_submissions.insert(user_id, tree);
                 Ok((is_update, old_submission))
             } else {
-                Err("No active event found".to_string())
+                Err("No active event".to_string())
             }
         })
         .await
+        .map_err(|e| e.to_string())
     }
 
-    pub async fn cast_vote(&self, guild_id: u64, tree: String, user_id: u64) -> Result<bool, String> {
+    pub async fn vote_tree(
+        &self,
+        guild_id: u64,
+        tree: String,
+        user_id: u64,
+    ) -> Result<bool, String> {
         self.write(|db| {
             if let Some(event) = db.events.get_mut(&guild_id) {
                 let is_update = event.tree_votes.contains_key(&user_id);
                 event.tree_votes.insert(user_id, tree);
                 Ok(is_update)
             } else {
-                Err("No active event found".to_string())
+                Err("No active event".to_string())
             }
         })
         .await
+        .map_err(|e| e.to_string())
     }
 
-    pub async fn update_event(&self, guild_id: u64, event: LoraxEvent) {
+    pub async fn update_event(&self, guild_id: u64, event: LoraxEvent) -> Result<(), String> {
         self.write(|db| {
             db.events.insert(guild_id, event);
+            Ok(())
         })
-        .await;
+        .await
+        .map_err(|e| e.to_string())
     }
 
-    pub async fn get_settings(&self, guild_id: u64) -> Option<LoraxSettings> {
-        self.read(|db| db.settings.get(&guild_id).cloned()).await
+    pub async fn get_settings(&self, guild_id: u64) -> Result<LoraxSettings, String> {
+        Ok(self
+            .read(|db| db.settings.get(&guild_id).cloned().unwrap_or_default())
+            .await)
     }
 
-    pub async fn ensure_settings(&self, guild_id: u64) -> LoraxSettings {
-        self.write(|db| {
-            db.settings.entry(guild_id).or_default().clone()
-        }).await
+    pub async fn ensure_settings(&self, guild_id: u64) -> Result<LoraxSettings, String> {
+        self.write(|db| Ok(db.settings.entry(guild_id).or_default().clone()))
+            .await
+            .map_err(|e| e.to_string())
     }
 }

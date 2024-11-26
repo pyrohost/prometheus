@@ -10,6 +10,8 @@ pub enum DbError {
     Io(#[from] std::io::Error),
     #[error("Serialization error: {0}")]
     Codec(String),
+    #[error("Database error: {0}")]
+    Custom(String),
 }
 
 /// A simple persistent database that stores serializable data
@@ -23,12 +25,11 @@ impl<T: Serialize + DeserializeOwned + Default> Database<T> {
     /// Creates a new database instance, loading existing data if available
     pub async fn new(path: impl Into<String>) -> Result<Self, DbError> {
         let path = path.into();
-        
-        // Create parent directory if it doesn't exist
+
         if let Some(parent) = Path::new(&path).parent() {
             fs::create_dir_all(parent).await?;
         }
-        
+
         let db = Self {
             data: Arc::new(RwLock::new(T::default())),
             path,
@@ -43,11 +44,10 @@ impl<T: Serialize + DeserializeOwned + Default> Database<T> {
 
     /// Saves the current state to disk
     pub async fn save(&self) -> Result<(), DbError> {
-        // Ensure parent directory exists before saving
         if let Some(parent) = Path::new(&self.path).parent() {
             fs::create_dir_all(parent).await?;
         }
-        
+
         let data = self.data.read().await;
         let bytes = bincode::serialize(&*data).map_err(|e| DbError::Codec(e.to_string()))?;
         fs::write(&self.path, bytes).await?;
@@ -72,16 +72,13 @@ impl<T: Serialize + DeserializeOwned + Default> Database<T> {
     }
 
     /// Modifies the database state and automatically saves changes
-    pub async fn write<F, R>(&self, f: F) -> R
+    pub async fn write<F, R>(&self, f: F) -> Result<R, DbError>
     where
-        F: FnOnce(&mut T) -> R,
+        F: FnOnce(&mut T) -> Result<R, String>,
     {
         let mut guard = self.data.write().await;
-        let result = f(&mut guard);
-        drop(guard);
-        if let Err(e) = self.save().await {
-            error!("Failed to save database: {}", e);
-        }
-        result
+        let result = f(&mut guard).map_err(DbError::Custom)?;
+        self.save().await?;
+        Ok(result)
     }
 }

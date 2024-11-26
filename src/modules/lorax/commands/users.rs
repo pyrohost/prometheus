@@ -1,25 +1,19 @@
-use crate::{modules::lorax::database::LoraxStage, Context, Error};
+use crate::{
+    modules::lorax::database::{LoraxEvent, LoraxStage},
+    Context, Error,
+};
 use poise::{
     command,
-    CreateReply,
     serenity_prelude::{
-        ComponentInteractionDataKind, CreateActionRow, CreateInteractionResponse,
-        CreateInteractionResponseMessage, CreateSelectMenu, CreateSelectMenuKind,
-        CreateSelectMenuOption, ButtonStyle, CreateButton,
+        ButtonStyle, ComponentInteractionDataKind, CreateActionRow, CreateButton,
+        CreateInteractionResponse, CreateInteractionResponseMessage, CreateSelectMenu,
+        CreateSelectMenuKind, CreateSelectMenuOption,
     },
+    CreateReply,
 };
 
 const RESERVED_TREES: [&str; 10] = [
-    "maple",   // for a canada server
-    "sakura",  // for a japan server
-    "baobab",  // for an africa server
-    "sequoia", // for a california server
-    "oak",     // for a british server
-    "pine",    // for a sweden server
-    "palm",    // for a tropical server
-    "willow",  // for a magical server
-    "cherry",  // for a blossom server
-    "redwood", // for a california server
+    "maple", "sakura", "baobab", "sequoia", "oak", "pine", "palm", "willow", "cherry", "redwood",
 ];
 
 #[command(slash_command, guild_only, ephemeral)]
@@ -35,7 +29,8 @@ pub async fn submit(
     let event = match ctx.data().dbs.lorax.get_event(guild_id).await {
         Some(event) => event,
         None => {
-            ctx.say("🛑 Oops! There's no Lorax event happening right now.").await?;
+            ctx.say("🛑 Oops! There's no Lorax event happening right now.")
+                .await?;
             return Ok(());
         }
     };
@@ -46,30 +41,30 @@ pub async fn submit(
     }
 
     if event.stage != LoraxStage::Submission {
-        ctx.say("🚫 Submissions are closed at the moment. Stay tuned for the next event!").await?;
+        ctx.say("🚫 Submissions are closed at the moment. Stay tuned for the next event!")
+            .await?;
         return Ok(());
     }
 
     let name = name.to_lowercase().trim().to_string();
 
-    // validation checks
-    if name.len() < 3 || name.len() > 32 {
-        ctx.say("❌ Your tree name must be between 3 and 32 characters long.\n💡 Example: \"maple\", \"birch\", \"magnolia\"").await?;
-        return Ok(());
-    }
-
-    if name.chars().any(|c| !c.is_ascii_alphabetic()) {
-        ctx.say("❌ Tree names can only contain letters (a-z).\n💡 Example: \"maple\", \"birch\", \"magnolia\"").await?;
+    if !is_valid_tree_name(&name) {
+        ctx.say(
+            "❌ Invalid tree name. Please ensure it is between 3 and 32 alphabetic characters.",
+        )
+        .await?;
         return Ok(());
     }
 
     if RESERVED_TREES.contains(&name.as_str()) || name == "lorax" {
-        ctx.say("🌲 That tree name is reserved. Try coming up with something unique! 🍃").await?;
+        ctx.say("🌲 That tree name is reserved. Try coming up with something unique! 🍃")
+            .await?;
         return Ok(());
     }
 
     if event.tree_submissions.values().any(|t| t == &name) {
-        ctx.say("🌳 Someone already suggested that name! How about a different one?").await?;
+        ctx.say("🌳 Someone already suggested that name! How about a different one?")
+            .await?;
         return Ok(());
     }
 
@@ -103,6 +98,12 @@ pub async fn submit(
     Ok(())
 }
 
+fn is_valid_tree_name(name: &str) -> bool {
+    let name = name.trim();
+    let length = name.len();
+    length >= 3 && length <= 32 && name.chars().all(|c| c.is_ascii_alphabetic())
+}
+
 #[command(slash_command, guild_only, ephemeral)]
 pub async fn vote(ctx: Context<'_>) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
@@ -119,26 +120,15 @@ pub async fn vote(ctx: Context<'_>) -> Result<(), Error> {
         }
     };
 
-    // Update this check to include Tiebreaker stage
-    if !matches!(event.stage, LoraxStage::Voting | LoraxStage::Tiebreaker(_)) {
-        let msg = if event.stage == LoraxStage::Submission {
-            "💡 Voting hasn't started yet, but you can `/submit` your tree name suggestion!"
-        } else {
-            "❌ Voting period has ended. Check back for the next event!"
-        };
-        ctx.say(msg).await?;
+    if !is_voting_stage(&event.stage) {
+        ctx.say("🚫 Voting is not active at the moment.").await?;
         return Ok(());
     }
 
-    let mut trees: Vec<String> = event
-        .tree_submissions
-        .iter()
-        .filter(|(&submitter_id, _)| submitter_id != user_id) // Only filter out own submission
-        .map(|(_, tree)| tree.clone())
-        .collect();
-
+    let mut trees = get_available_trees(&event, user_id);
     if trees.is_empty() {
-        ctx.say("🤔 There's nothing to vote on yet. Wait for more submissions!").await?;
+        ctx.say("🤔 There's nothing to vote on yet. Wait for more submissions!")
+            .await?;
         return Ok(());
     }
 
@@ -149,20 +139,19 @@ pub async fn vote(ctx: Context<'_>) -> Result<(), Error> {
     let mut current_page = 0;
 
     let create_reply = |page: usize| {
-        let mut components = vec![
-            CreateActionRow::SelectMenu(
-                CreateSelectMenu::new(
-                    "vote_tree",
-                    CreateSelectMenuKind::String {
-                        options: trees[page * page_size..(page * page_size + page_size).min(trees.len())]
-                            .iter()
-                            .map(|tree| CreateSelectMenuOption::new(tree, tree))
-                            .collect(),
-                    },
-                )
-                .placeholder("Choose wisely..."),
-            ),
-        ];
+        let mut components = vec![CreateActionRow::SelectMenu(
+            CreateSelectMenu::new(
+                "vote_tree",
+                CreateSelectMenuKind::String {
+                    options: trees
+                        [page * page_size..(page * page_size + page_size).min(trees.len())]
+                        .iter()
+                        .map(|tree| CreateSelectMenuOption::new(tree, tree))
+                        .collect(),
+                },
+            )
+            .placeholder("Choose wisely..."),
+        )];
 
         if total_pages > 1 {
             components.push(CreateActionRow::Buttons(vec![
@@ -187,20 +176,19 @@ pub async fn vote(ctx: Context<'_>) -> Result<(), Error> {
     };
 
     let create_update = |page: usize| {
-        let mut components = vec![
-            CreateActionRow::SelectMenu(
-                CreateSelectMenu::new(
-                    "vote_tree",
-                    CreateSelectMenuKind::String {
-                        options: trees[page * page_size..(page * page_size + page_size).min(trees.len())]
-                            .iter()
-                            .map(|tree| CreateSelectMenuOption::new(tree, tree))
-                            .collect(),
-                    },
-                )
-                .placeholder("Choose wisely..."),
-            ),
-        ];
+        let mut components = vec![CreateActionRow::SelectMenu(
+            CreateSelectMenu::new(
+                "vote_tree",
+                CreateSelectMenuKind::String {
+                    options: trees
+                        [page * page_size..(page * page_size + page_size).min(trees.len())]
+                        .iter()
+                        .map(|tree| CreateSelectMenuOption::new(tree, tree))
+                        .collect(),
+                },
+            )
+            .placeholder("Choose wisely..."),
+        )];
 
         if total_pages > 1 {
             components.push(CreateActionRow::Buttons(vec![
@@ -258,52 +246,35 @@ pub async fn vote(ctx: Context<'_>) -> Result<(), Error> {
                 }
             }
             "vote_tree" => {
-                if let ComponentInteractionDataKind::StringSelect { values, .. } = &interaction.data.kind {
+                if let ComponentInteractionDataKind::StringSelect { values, .. } =
+                    &interaction.data.kind
+                {
                     let selected_tree = values.first().ok_or("No selection made")?;
-        
+
                     match ctx
                         .data()
                         .dbs
                         .lorax
-                        .cast_vote(guild_id, selected_tree.to_string(), user_id)
+                        .write(|db| {
+                            let event = db
+                                .events
+                                .get_mut(&guild_id)
+                                .ok_or_else(|| "No active event".to_string())?;
+
+                            if event.tree_votes.contains_key(&user_id) {
+                                return Err("You've already voted!".to_string());
+                            }
+
+                            event.tree_votes.insert(user_id, selected_tree.to_string());
+                            Ok(())
+                        })
                         .await
                     {
-                        Ok(was_update) => {
-                            let msg = if was_update {
-                                format!(
-                                    "🔄 Changed your vote to \"**{}**\"!\n⏳ Results will be announced when voting ends.",
-                                    selected_tree
-                                )
-                            } else {
-                                format!(
-                                    "🗳️ You voted for \"**{}**\"!\n⏳ Results will be announced when voting ends.",
-                                    selected_tree
-                                )
-                            };
-                            interaction
-                                .create_response(
-                                    &ctx.serenity_context().http,
-                                    CreateInteractionResponse::UpdateMessage(
-                                        CreateInteractionResponseMessage::new()
-                                            .content(msg)
-                                            .components(vec![]),
-                                    ),
-                                )
-                                .await?;
-                            return Ok(());
+                        Ok(_) => {
+                            ctx.say("✅ Vote recorded!").await?;
                         }
                         Err(e) => {
-                            interaction
-                                .create_response(
-                                    &ctx.serenity_context().http,
-                                    CreateInteractionResponse::UpdateMessage(
-                                        CreateInteractionResponseMessage::new()
-                                            .content(format!("❌ Could not record your vote: {}", e))
-                                            .components(vec![]),
-                                    ),
-                                )
-                                .await?;
-                            return Ok(());
+                            ctx.say(format!("❌ Unable to cast vote: {}", e)).await?;
                         }
                     }
                 } else {
@@ -314,6 +285,20 @@ pub async fn vote(ctx: Context<'_>) -> Result<(), Error> {
         }
     }
 
-    ctx.say("⌛ Time's up! Feel free to `/vote` again anytime.").await?;
+    ctx.say("⌛ Time's up! Feel free to `/vote` again anytime.")
+        .await?;
     Ok(())
+}
+
+fn is_voting_stage(stage: &LoraxStage) -> bool {
+    matches!(stage, LoraxStage::Voting | LoraxStage::Tiebreaker(_))
+}
+
+fn get_available_trees(event: &LoraxEvent, user_id: u64) -> Vec<String> {
+    event
+        .tree_submissions
+        .iter()
+        .filter(|(&submitter_id, _)| submitter_id != user_id)
+        .map(|(_, tree)| tree.clone())
+        .collect()
 }

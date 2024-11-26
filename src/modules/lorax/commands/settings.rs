@@ -5,7 +5,12 @@ use poise::{
 };
 
 /// Configure Lorax settings for your server
-#[command(slash_command, guild_only, required_permissions = "MANAGE_GUILD", subcommands("channel", "roles", "durations", "view"))]
+#[command(
+    slash_command,
+    guild_only,
+    required_permissions = "MANAGE_GUILD",
+    subcommands("channel", "roles", "durations", "view")
+)]
 pub async fn config(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
@@ -24,11 +29,15 @@ pub async fn channel(
         .write(|db| {
             let settings = db.settings.entry(guild_id).or_default();
             settings.lorax_channel = Some(channel.id().get());
+            Ok(())
         })
-        .await;
-
-    ctx.say(format!("✅ Lorax announcements will be in {}!", channel.mention()))
         .await?;
+
+    ctx.say(format!(
+        "✅ Lorax announcements will be in {}!",
+        channel.mention()
+    ))
+    .await?;
     Ok(())
 }
 
@@ -42,35 +51,38 @@ pub async fn roles(
 ) -> Result<(), Error> {
     let guild_id = ctx.guild_id().unwrap().get();
 
-    // Store role IDs before moving the roles
-    let winner_role_exists = winner_role.is_some();
-    let alumni_role_exists = alumni_role.is_some();
-
-    // Validate roles are below bot's highest role
-    if let Some(guild) = ctx.guild() {
+    let guild = ctx.guild().map(|g| g.clone());
+    let bot_top_role = if let Some(guild) = guild.as_ref() {
         if let Some(bot_member) = guild.members.get(&ctx.framework().bot_id) {
-            let bot_top_role = bot_member.roles.iter()
+            bot_member
+                .roles
+                .iter()
                 .filter_map(|r| guild.roles.get(r))
-                .max_by_key(|r| r.position);
+                .max_by_key(|r| r.position)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
 
-            let validate_role = |role: &serenity::Role| -> Result<(), String> {
-                if let Some(top_role) = &bot_top_role {
-                    if role.position >= top_role.position {
-                        return Err("One or more roles are positioned higher than the bot's highest role.".to_string());
-                    }
-                }
-                Ok(())
-            };
+    let roles_to_validate: Vec<_> = [&event_role, &winner_role, &alumni_role]
+        .iter()
+        .filter_map(|r| r.as_ref())
+        .collect();
 
-            // Validate each role if provided
-            if let Some(role) = &winner_role {
-                validate_role(role)?;
-            }
-            if let Some(role) = &alumni_role {
-                validate_role(role)?;
+    if let Some(top_role) = bot_top_role {
+        for role in &roles_to_validate {
+            if role.position >= top_role.position {
+                ctx.say("One or more roles are positioned higher than the bot's highest role.")
+                    .await?;
+                return Ok(());
             }
         }
     }
+
+    let winner_role_exists = winner_role.is_some();
+    let alumni_role_exists = alumni_role.is_some();
 
     ctx.data()
         .dbs
@@ -86,12 +98,12 @@ pub async fn roles(
             if let Some(role) = alumni_role {
                 settings.alumni_role = Some(role.id.get());
             }
+            Ok(())
         })
-        .await;
+        .await?;
 
     let mut response = "✅ Roles updated successfully!".to_string();
-    
-    // Use the stored boolean values instead of the moved Options
+
     if winner_role_exists && !alumni_role_exists {
         response.push_str("\n⚠️ Warning: Winner role is set but no alumni role is configured. Previous winners will lose their status.");
     }
@@ -124,8 +136,9 @@ pub async fn durations(
             if let Some(mins) = tiebreaker {
                 settings.tiebreaker_duration = mins;
             }
+            Ok(())
         })
-        .await;
+        .await?;
 
     ctx.say("⏱️ Durations updated!").await?;
     Ok(())
@@ -135,8 +148,13 @@ pub async fn durations(
 #[command(slash_command, guild_only)]
 pub async fn view(ctx: Context<'_>) -> Result<(), Error> {
     let guild_id = ctx.guild_id().unwrap().get();
-    
-    let settings = ctx.data().dbs.lorax.get_settings(guild_id).await
+
+    let settings = ctx
+        .data()
+        .dbs
+        .lorax
+        .get_settings(guild_id)
+        .await
         .unwrap_or_default();
 
     let msg = format!(
@@ -148,10 +166,18 @@ pub async fn view(ctx: Context<'_>) -> Result<(), Error> {
         ⏳ **Submission Duration:** {} minutes\n\
         ⏳ **Voting Duration:** {} minutes\n\
         ⏳ **Tiebreaker Duration:** {} minutes",
-        settings.lorax_channel.map_or("Not set".into(), |id| format!("<#{}>", id)),
-        settings.lorax_role.map_or("Not set".into(), |id| format!("<@&{}>", id)),
-        settings.winner_role.map_or("Not set".into(), |id| format!("<@&{}>", id)),
-        settings.alumni_role.map_or("Not set".into(), |id| format!("<@&{}>", id)),
+        settings
+            .lorax_channel
+            .map_or("Not set".into(), |id| format!("<#{}>", id)),
+        settings
+            .lorax_role
+            .map_or("Not set".into(), |id| format!("<@&{}>", id)),
+        settings
+            .winner_role
+            .map_or("Not set".into(), |id| format!("<@&{}>", id)),
+        settings
+            .alumni_role
+            .map_or("Not set".into(), |id| format!("<@&{}>", id)),
         settings.submission_duration,
         settings.voting_duration,
         settings.tiebreaker_duration

@@ -9,7 +9,7 @@ pub mod users;
     slash_command,
     subcommands(
         "events::start",
-        "events::end", 
+        "events::end",
         "events::status",
         "events::stats",
         "events::duration",

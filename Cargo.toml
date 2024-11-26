@@ -1,0 +1,18 @@
+[package]
+name = "prometheus"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+async-trait = "0.1.77"
+time = { version = "0.3", features = ["formatting"] }
+bincode = "1.3.3"
+poise = { git = "https://github.com/serenity-rs/poise", version = "0.6.1", features = ["collector"] }
+serde = { version = "1.0.215", features = ["derive"] }
+tokio = { version = "1.41.1", features = ["full"] }
+rand = "0.8"
+dotenvy = "0.15.7"
+tracing = "0.1.40"
+tracing-subscriber = "0.3.18"
+thiserror = "2.0.3"
+chrono = "0.4.38"

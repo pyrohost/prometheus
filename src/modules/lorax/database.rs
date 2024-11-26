@@ -76,7 +76,7 @@ impl LoraxEvent {
     }
 }
 
-#[derive(Default, Serialize, Deserialize, Clone)]
+#[derive(Default, Serialize, Deserialize, Clone, Debug)]
 pub struct LoraxDatabase {
     pub events: HashMap<u64, LoraxEvent>,
     pub settings: HashMap<u64, LoraxSettings>,

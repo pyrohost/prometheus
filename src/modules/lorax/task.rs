@@ -15,7 +15,7 @@ pub fn get_current_timestamp() -> u64 {
         .as_secs()
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct LoraxEventTask {
     pub guild_id: u64,
     pub db: Arc<Database<LoraxDatabase>>,

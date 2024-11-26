@@ -5,7 +5,7 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
 #[async_trait::async_trait]
-pub trait Task: Send + Sync {
+pub trait Task: Send + Sync + std::fmt::Debug {
     fn name(&self) -> &str;
     fn schedule(&self) -> Option<Duration>;
     async fn execute(
@@ -15,6 +15,7 @@ pub trait Task: Send + Sync {
     fn box_clone(&self) -> Box<dyn Task>;
 }
 
+#[derive(Debug)]
 pub struct TaskManager {
     tasks: Mutex<Vec<Box<dyn Task>>>,
     handles: Mutex<Vec<JoinHandle<()>>>,

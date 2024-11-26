@@ -23,21 +23,63 @@ pub async fn channel(
 ) -> Result<(), Error> {
     let guild_id = ctx.guild_id().unwrap().get();
 
-    ctx.data()
+    let text_channel = match channel.guild() {
+        Some(channel) => channel,
+        None => {
+            ctx.say("❌ Please select a text channel.").await?;
+            return Ok(());
+        }
+    };
+
+    let bot_permissions = match {
+        let guild = ctx.guild().unwrap();
+        let bot_member = guild.members.get(&ctx.framework().bot_id);
+        if let Some(bot_member) = bot_member {
+            Ok(guild.user_permissions_in(&text_channel, bot_member))
+        } else {
+            Err(())
+        }
+    } {
+        Ok(perms) => perms,
+        Err(_) => {
+            ctx.say("❌ Failed to verify bot permissions. Please try again.")
+                .await?;
+            return Ok(());
+        }
+    };
+
+    if !bot_permissions.send_messages() || !bot_permissions.embed_links() {
+        ctx.say("❌ I need permission to send messages and embed links in that channel.")
+            .await?;
+        return Ok(());
+    }
+
+    let channel_id = text_channel.id.get();
+
+    match ctx
+        .data()
         .dbs
         .lorax
         .write(|db| {
             let settings = db.settings.entry(guild_id).or_default();
-            settings.lorax_channel = Some(channel.id().get());
+            settings.lorax_channel = Some(channel_id);
             Ok(())
         })
-        .await?;
+        .await
+    {
+        Ok(_) => {
+            ctx.say(format!(
+                "✅ Lorax announcements will be in {}!",
+                text_channel.mention()
+            ))
+            .await?;
+        }
+        Err(_e) => {
+            ctx.say("❌ Failed to save channel settings. Please try again later.")
+                .await?;
+        }
+    }
 
-    ctx.say(format!(
-        "✅ Lorax announcements will be in {}!",
-        channel.mention()
-    ))
-    .await?;
     Ok(())
 }
 
@@ -51,19 +93,20 @@ pub async fn roles(
 ) -> Result<(), Error> {
     let guild_id = ctx.guild_id().unwrap().get();
 
-    let guild = ctx.guild().map(|g| g.clone());
-    let bot_top_role = if let Some(guild) = guild.as_ref() {
-        if let Some(bot_member) = guild.members.get(&ctx.framework().bot_id) {
-            bot_member
+    let bot_top_role = {
+        let guild = ctx.guild().unwrap();
+        let bot_member = guild.members.get(&ctx.framework().bot_id);
+        if let Some(bot_member) = bot_member {
+            let bot_roles: Vec<_> = bot_member
                 .roles
                 .iter()
                 .filter_map(|r| guild.roles.get(r))
-                .max_by_key(|r| r.position)
+                .cloned()
+                .collect();
+            bot_roles.into_iter().max_by_key(|r| r.position)
         } else {
             None
         }
-    } else {
-        None
     };
 
     let roles_to_validate: Vec<_> = [&event_role, &winner_role, &alumni_role]
@@ -159,8 +202,8 @@ pub async fn view(ctx: Context<'_>) -> Result<(), Error> {
 
     let msg = format!(
         "⚙️ **Lorax Settings**\n\
-        📢 **Channel:** {}\n\
-        🎉 **Event Role:** {}\n\
+        �� **Channel:** {}\n\
+        ���� **Event Role:** {}\n\
         🏆 **Winner Role:** {}\n\
         🏅 **Alumni Role:** {}\n\
         ⏳ **Submission Duration:** {} minutes\n\

@@ -3,7 +3,7 @@ use databases::Databases;
 use modules::lorax::task::LoraxEventTask;
 use poise::serenity_prelude as serenity;
 use std::sync::Arc;
-use tracing::info;
+use tracing::{error, info, trace};
 
 mod database;
 mod databases;
@@ -11,7 +11,7 @@ mod modules;
 mod tasks;
 mod utils;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Data {
     pub dbs: Arc<Databases>,
     pub task_manager: Arc<tasks::TaskManager>,
@@ -60,6 +60,45 @@ async fn main() {
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions::<Data, Error> {
             commands: vec![register(), modules::lorax::commands::lorax()],
+            pre_command: |ctx| {
+                Box::pin(async move {
+                    trace!(
+                        "Command {} used by {} in {}",
+                        ctx.command().qualified_name,
+                        ctx.author().tag(),
+                        ctx.guild_id()
+                            .map_or_else(|| "DM".to_string(), |id| id.to_string())
+                    );
+                })
+            },
+            post_command: |ctx| {
+                Box::pin(async move {
+                    info!(
+                        "Command {} completed for {} in {}",
+                        ctx.command().qualified_name,
+                        ctx.author().tag(),
+                        ctx.guild_id()
+                            .map_or_else(|| "DM".to_string(), |id| id.to_string())
+                    );
+                })
+            },
+            on_error: |error| {
+                Box::pin(async move {
+                    match error {
+                        poise::FrameworkError::Command { error, ctx, .. } => {
+                            error!(
+                                "Error in command {}: {}\nUser: {}, Guild: {}",
+                                ctx.command().qualified_name,
+                                error,
+                                ctx.author().tag(),
+                                ctx.guild_id()
+                                    .map_or_else(|| "DM".to_string(), |id| id.to_string())
+                            );
+                        }
+                        err => error!("Other framework error: {:?}", err),
+                    }
+                })
+            },
             ..Default::default()
         })
         .setup(|ctx, _ready, framework| {

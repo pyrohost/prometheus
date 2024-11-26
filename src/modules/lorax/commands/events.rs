@@ -6,6 +6,7 @@ use crate::modules::lorax::{database::LoraxStage, task::LoraxEventTask};
 use crate::{Context, Error};
 use poise::command;
 use poise::serenity_prelude::{self as serenity, ChannelId, EditMessage, Mentionable};
+use tracing::error;
 
 /// Kick off a new Lorax event for your community!
 #[command(slash_command, guild_only, required_permissions = "MANAGE_GUILD")]
@@ -62,13 +63,13 @@ pub async fn end(ctx: Context<'_>) -> Result<(), Error> {
 pub async fn status(ctx: Context<'_>) -> Result<(), Error> {
     let guild_id = ctx.guild_id().unwrap().get();
 
-    let event = ctx
-        .data()
-        .dbs
-        .lorax
-        .get_event(guild_id)
-        .await
-        .ok_or("No active Lorax event")?;
+    let event = match ctx.data().dbs.lorax.get_event(guild_id).await {
+        Some(event) => event,
+        None => {
+            ctx.say("⚪ No active Lorax event is running.").await?;
+            return Ok(());
+        }
+    };
 
     let medal_emojis = ["🥇", "🥈", "🥉"];
 
@@ -148,13 +149,13 @@ pub async fn status(ctx: Context<'_>) -> Result<(), Error> {
 pub async fn force_advance(ctx: Context<'_>) -> Result<(), Error> {
     let guild_id = ctx.guild_id().unwrap().get();
 
-    let event = ctx
-        .data()
-        .dbs
-        .lorax
-        .get_event(guild_id)
-        .await
-        .ok_or("No active Lorax event")?;
+    let event = match ctx.data().dbs.lorax.get_event(guild_id).await {
+        Some(event) => event,
+        None => {
+            ctx.say("⚪ No active Lorax event is running.").await?;
+            return Ok(());
+        }
+    };
 
     if matches!(event.stage, LoraxStage::Completed | LoraxStage::Inactive) {
         ctx.say("❌ Cannot advance a completed or inactive event.")
@@ -170,15 +171,21 @@ pub async fn force_advance(ctx: Context<'_>) -> Result<(), Error> {
         .await;
 
     if !matches!(updated_event.stage, LoraxStage::Inactive) {
-        let _ = ctx
+        if let Err(e) = ctx
             .data()
             .dbs
             .lorax
             .update_event(guild_id, updated_event)
-            .await;
+            .await
+        {
+            error!("Failed to update event for guild {}: {}", guild_id, e);
+            ctx.say("❌ Failed to update event stage. Please try again later.")
+                .await?;
+        } else {
+            ctx.say("⏩ Advanced to the next stage!").await?;
+        }
     }
 
-    ctx.say("⏩ Advanced to the next stage!").await?;
     Ok(())
 }
 
@@ -187,13 +194,13 @@ pub async fn force_advance(ctx: Context<'_>) -> Result<(), Error> {
 pub async fn stats(ctx: Context<'_>) -> Result<(), Error> {
     let guild_id = ctx.guild_id().unwrap().get();
 
-    let event = ctx
-        .data()
-        .dbs
-        .lorax
-        .get_event(guild_id)
-        .await
-        .ok_or("No active Lorax event")?;
+    let event = match ctx.data().dbs.lorax.get_event(guild_id).await {
+        Some(event) => event,
+        None => {
+            ctx.say("⚪ No active Lorax event is running.").await?;
+            return Ok(());
+        }
+    };
 
     let lorax_task = LoraxEventTask::new(guild_id, Arc::new(ctx.data().dbs.lorax.clone()));
     let duration = lorax_task.calculate_stage_duration(&event);
@@ -310,13 +317,25 @@ pub async fn duration(
 ) -> Result<(), Error> {
     let guild_id = ctx.guild_id().unwrap().get();
 
-    let mut event = ctx
-        .data()
-        .dbs
-        .lorax
-        .get_event(guild_id)
-        .await
-        .ok_or("No active Lorax event")?;
+    let mut event = match ctx.data().dbs.lorax.get_event(guild_id).await {
+        Some(event) => event,
+        None => {
+            ctx.say("⚪ No active Lorax event is running.").await?;
+            return Ok(());
+        }
+    };
+
+    if matches!(event.stage, LoraxStage::Completed | LoraxStage::Inactive) {
+        ctx.say("❌ Cannot modify duration of a completed or inactive event.")
+            .await?;
+        return Ok(());
+    }
+
+    let adjusted_duration = (minutes * 60) as i64;
+    if adjusted_duration < 0 {
+        ctx.say("❌ Duration cannot be negative.").await?;
+        return Ok(());
+    }
 
     let lorax_task = LoraxEventTask::new(guild_id, Arc::new(ctx.data().dbs.lorax.clone()));
 
@@ -376,7 +395,8 @@ pub async fn duration(
 pub async fn reset(ctx: Context<'_>) -> Result<(), Error> {
     let guild_id = ctx.guild_id().unwrap().get();
 
-    ctx.data()
+    match ctx
+        .data()
         .dbs
         .lorax
         .write(|db| {
@@ -384,9 +404,18 @@ pub async fn reset(ctx: Context<'_>) -> Result<(), Error> {
             db.settings.remove(&guild_id);
             Ok(())
         })
-        .await?;
+        .await
+    {
+        Ok(_) => {
+            ctx.say("🔄 Lorax has been reset for this server.").await?;
+        }
+        Err(e) => {
+            error!("Failed to reset Lorax for guild {}: {}", guild_id, e);
+            ctx.say("❌ Failed to reset Lorax settings. Please try again later.")
+                .await?;
+        }
+    }
 
-    ctx.say("🔄 Lorax has been reset for this server.").await?;
     Ok(())
 }
 
@@ -400,13 +429,13 @@ pub async fn reset(ctx: Context<'_>) -> Result<(), Error> {
 pub async fn submissions(ctx: Context<'_>) -> Result<(), Error> {
     let guild_id = ctx.guild_id().unwrap().get();
 
-    let event = ctx
-        .data()
-        .dbs
-        .lorax
-        .get_event(guild_id)
-        .await
-        .ok_or("No active event")?;
+    let event = match ctx.data().dbs.lorax.get_event(guild_id).await {
+        Some(event) => event,
+        None => {
+            ctx.say("⚪ No active Lorax event is running.").await?;
+            return Ok(());
+        }
+    };
 
     let mut submissions: Vec<_> = event
         .tree_submissions
@@ -439,13 +468,13 @@ pub async fn submissions(ctx: Context<'_>) -> Result<(), Error> {
 pub async fn votes(ctx: Context<'_>) -> Result<(), Error> {
     let guild_id = ctx.guild_id().unwrap().get();
 
-    let event = ctx
-        .data()
-        .dbs
-        .lorax
-        .get_event(guild_id)
-        .await
-        .ok_or("No active event")?;
+    let event = match ctx.data().dbs.lorax.get_event(guild_id).await {
+        Some(event) => event,
+        None => {
+            ctx.say("⚪ No active Lorax event is running.").await?;
+            return Ok(());
+        }
+    };
 
     if !matches!(event.stage, LoraxStage::Voting | LoraxStage::Tiebreaker(_)) {
         ctx.say("❌ Voting is not currently active.").await?;
@@ -481,13 +510,13 @@ pub async fn remove_submission(
 ) -> Result<(), Error> {
     let guild_id = ctx.guild_id().unwrap().get();
 
-    let mut event = ctx
-        .data()
-        .dbs
-        .lorax
-        .get_event(guild_id)
-        .await
-        .ok_or("No active event")?;
+    let mut event = match ctx.data().dbs.lorax.get_event(guild_id).await {
+        Some(event) => event,
+        None => {
+            ctx.say("⚪ No active Lorax event is running.").await?;
+            return Ok(());
+        }
+    };
 
     let tree = tree.to_lowercase();
     let submitter = event
@@ -516,13 +545,13 @@ pub async fn remove_vote(
 ) -> Result<(), Error> {
     let guild_id = ctx.guild_id().unwrap().get();
 
-    let mut event = ctx
-        .data()
-        .dbs
-        .lorax
-        .get_event(guild_id)
-        .await
-        .ok_or("No active event")?;
+    let mut event = match ctx.data().dbs.lorax.get_event(guild_id).await {
+        Some(event) => event,
+        None => {
+            ctx.say("⚪ No active Lorax event is running.").await?;
+            return Ok(());
+        }
+    };
 
     if event.tree_votes.remove(&user.id.get()).is_some() {
         let _ = ctx.data().dbs.lorax.update_event(guild_id, event).await;

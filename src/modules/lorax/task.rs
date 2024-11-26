@@ -98,7 +98,10 @@ impl LoraxEventTask {
             }
 
             let stage_duration = self.calculate_stage_duration(&event);
-            if current_time - event.start_time >= stage_duration {
+            let elapsed_time = current_time.saturating_sub(event.start_time);
+
+           
+            if elapsed_time > stage_duration {
                 let mut updated_event = event.clone();
                 self.advance_stage(ctx, &mut updated_event).await;
                 let _ = self.db.update_event(self.guild_id, updated_event).await;
@@ -108,21 +111,48 @@ impl LoraxEventTask {
 
     pub async fn send_stage_message(&mut self, ctx: &Context, event: &mut LoraxEvent) {
         if let Some(channel_id) = event.settings.lorax_channel {
+            let role_ping = event
+                .settings
+                .lorax_role
+                .map(|id| format!("<@&{}> ", id))
+                .unwrap_or_default();
+
             let content = match event.stage {
                 LoraxStage::Submission => format!(
-                    "🌿 Submission phase has begun! Use `/lorax submit` to participate.\nEnds <t:{}:R>",
+                    "{role_ping}🌿 New Lorax event! Submit your tree name with `/lorax submit`. Submissions close <t:{}:R>",
                     event.get_stage_end_timestamp(self.calculate_stage_duration(event))
                 ),
                 LoraxStage::Voting => format!(
-                    "🗳️ Voting phase has started! Use `/lorax vote` to choose your favorite.\nEnds <t:{}:R>",
+                    "{role_ping}🗳️ Time to vote! {} entries submitted. Use `/lorax vote` to choose your favorite. Voting ends <t:{}:R>",
+                    event.current_trees.len(),
                     event.get_stage_end_timestamp(self.calculate_stage_duration(event))
                 ),
                 LoraxStage::Tiebreaker(round) => format!(
-                    "🎯 Tiebreaker Round {} has begun! Vote again to break the tie.\nEnds <t:{}:R>",
+                    "{role_ping}🎯 Tiebreaker Round {}! {} entries tied. Vote again with `/lorax vote`. Ends <t:{}:R>",
                     round,
+                    event.current_trees.len(),
                     event.get_stage_end_timestamp(self.calculate_stage_duration(event))
                 ),
-                LoraxStage::Completed => "✨ The event has concluded! Thanks for participating!".to_string(),
+                LoraxStage::Completed => {
+                    let mut podium = String::new();
+                    for (i, tree) in event.current_trees.iter().take(3).enumerate() {
+                        if let Some(winner_id) = event.get_tree_submitter(tree) {
+                            let medal = match i {
+                                0 => "🥇",
+                                1 => "🥈",
+                                2 => "🥉",
+                                _ => unreachable!(),
+                            };
+                            podium.push_str(&format!("{} **{}**\n└ Submitted by <@{}>\n\n", medal, tree, winner_id));
+                        }
+                    }
+                    format!(
+                        "{role_ping}🎊 **This Lorax Event Has Concluded!**\n\n{}\n🌲 **Event Stats**\n└ Total Entries: {}\n└ Total Votes: {}",
+                        podium,
+                        event.tree_submissions.len(),
+                        event.tree_votes.len()
+                    )
+                },
                 LoraxStage::Inactive => "Event is inactive".to_string(),
             };
 

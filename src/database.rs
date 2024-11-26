@@ -2,7 +2,7 @@ use serde::{de::DeserializeOwned, Serialize};
 use std::{path::Path, sync::Arc, time::Duration};
 use thiserror::Error;
 use tokio::{fs, sync::RwLock, time};
-use tracing::{error, info};
+use tracing::error;
 
 #[derive(Error, Debug)]
 pub enum DbError {
@@ -68,7 +68,6 @@ impl<T: Serialize + DeserializeOwned + Default + Send + Sync + 'static> Database
         let data = self.data.read().await;
         let bytes = bincode::serialize(&*data).map_err(|e| DbError::Codec(e.to_string()))?;
         fs::write(&self.path, bytes).await?;
-        info!("Successfully saved database to {}", self.path);
         Ok(())
     }
 

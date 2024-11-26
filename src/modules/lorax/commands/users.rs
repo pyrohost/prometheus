@@ -11,10 +11,53 @@ use poise::{
     },
     CreateReply,
 };
+use tracing::error;
 
 const RESERVED_TREES: [&str; 10] = [
     "maple", "sakura", "baobab", "sequoia", "oak", "pine", "palm", "willow", "cherry", "redwood",
 ];
+
+async fn fetch_node_names() -> Result<Vec<String>, String> {
+    let client = reqwest::Client::new();
+    let response = client
+        .get("https://metrics.pyro.host/api/v1/query")
+        .query(&[("query", "node_uname_info")])
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch metrics: {}", e))?;
+
+    #[derive(serde::Deserialize)]
+    struct PrometheusResponse {
+        data: Data,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Data {
+        result: Vec<Result>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Result {
+        metric: Metric,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Metric {
+        nodename: String,
+    }
+
+    let data: PrometheusResponse = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+
+    Ok(data
+        .data
+        .result
+        .into_iter()
+        .map(|r| r.metric.nodename.to_lowercase())
+        .collect())
+}
 
 #[command(slash_command, guild_only, ephemeral)]
 pub async fn submit(
@@ -54,6 +97,23 @@ pub async fn submit(
         )
         .await?;
         return Ok(());
+    }
+
+   
+    match fetch_node_names().await {
+        Ok(node_names) => {
+            if node_names.contains(&name) {
+                ctx.say(
+                    "🌲 That tree name is already in use as a node name. Please choose another!",
+                )
+                .await?;
+                return Ok(());
+            }
+        }
+        Err(e) => {
+            error!("Failed to fetch node names: {}", e);
+           
+        }
     }
 
     if RESERVED_TREES.contains(&name.as_str()) || name == "lorax" {

@@ -1,7 +1,7 @@
 use crate::modules::lorax::database::LoraxHandler;
 use databases::Databases;
 use modules::lorax::task::LoraxEventTask;
-use poise::serenity_prelude as serenity;
+use poise::serenity_prelude::{self as serenity, CreateAllowedMentions};
 use std::sync::Arc;
 use tracing::{error, info, trace};
 
@@ -59,6 +59,7 @@ async fn main() {
 
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions::<Data, Error> {
+            allowed_mentions: Some(CreateAllowedMentions::new().empty_roles().empty_users()),
             commands: vec![register(), modules::lorax::commands::lorax()],
             pre_command: |ctx| {
                 Box::pin(async move {
@@ -87,12 +88,12 @@ async fn main() {
                     match error {
                         poise::FrameworkError::Command { error, ctx, .. } => {
                             error!(
-                                "Error in command {}: {}\nUser: {}, Guild: {}",
+                                "Command {} failed for {} in {}: {:?}",
                                 ctx.command().qualified_name,
-                                error,
                                 ctx.author().tag(),
                                 ctx.guild_id()
-                                    .map_or_else(|| "DM".to_string(), |id| id.to_string())
+                                    .map_or_else(|| "DM".to_string(), |id| id.to_string()),
+                                error
                             );
                         }
                         err => error!("Other framework error: {:?}", err),
@@ -119,5 +120,6 @@ async fn main() {
     let client = serenity::ClientBuilder::new(token, intents)
         .framework(framework)
         .await;
+
     client.unwrap().start().await.unwrap();
 }

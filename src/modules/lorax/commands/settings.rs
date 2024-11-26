@@ -3,6 +3,7 @@ use poise::{
     command,
     serenity_prelude::{self as serenity, Mentionable},
 };
+use tracing::error;
 
 /// Configure Lorax settings for your server
 #[command(
@@ -165,7 +166,38 @@ pub async fn durations(
 ) -> Result<(), Error> {
     let guild_id = ctx.guild_id().unwrap().get();
 
-    ctx.data()
+    if submission.is_none() && voting.is_none() && tiebreaker.is_none() {
+        ctx.say("❌ Please specify at least one duration to update.")
+            .await?;
+        return Ok(());
+    }
+
+   
+    if let Some(mins) = submission {
+        if mins < 1 || mins > 1440 {
+           
+            ctx.say("❌ Submission duration must be between 1 and 1440 minutes.")
+                .await?;
+            return Ok(());
+        }
+    }
+    if let Some(mins) = voting {
+        if mins < 1 || mins > 1440 {
+            ctx.say("❌ Voting duration must be between 1 and 1440 minutes.")
+                .await?;
+            return Ok(());
+        }
+    }
+    if let Some(mins) = tiebreaker {
+        if mins < 1 || mins > 1440 {
+            ctx.say("❌ Tiebreaker duration must be between 1 and 1440 minutes.")
+                .await?;
+            return Ok(());
+        }
+    }
+
+    match ctx
+        .data()
         .dbs
         .lorax
         .write(|db| {
@@ -181,9 +213,18 @@ pub async fn durations(
             }
             Ok(())
         })
-        .await?;
+        .await
+    {
+        Ok(_) => {
+            ctx.say("⏱️ Durations updated!").await?;
+        }
+        Err(e) => {
+            error!("Failed to update durations for guild {}: {}", guild_id, e);
+            ctx.say("❌ Failed to update durations. Please try again later.")
+                .await?;
+        }
+    }
 
-    ctx.say("⏱️ Durations updated!").await?;
     Ok(())
 }
 
@@ -202,8 +243,8 @@ pub async fn view(ctx: Context<'_>) -> Result<(), Error> {
 
     let msg = format!(
         "⚙️ **Lorax Settings**\n\
-        �� **Channel:** {}\n\
-        ���� **Event Role:** {}\n\
+        📢 **Channel:** {}\n\
+        🎉 **Event Role:** {}\n\
         🏆 **Winner Role:** {}\n\
         🏅 **Alumni Role:** {}\n\
         ⏳ **Submission Duration:** {} minutes\n\

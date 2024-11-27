@@ -13,7 +13,7 @@ use poise::{
     },
     CreateReply,
 };
-use tracing::error;
+use tracing::{error, info};
 
 const RESERVED_TREES: [&str; 10] = [
     "maple", "sakura", "baobab", "sequoia", "oak", "pine", "palm", "willow", "cherry", "redwood",
@@ -93,6 +93,16 @@ pub async fn submit(
 
     let name = name.to_lowercase().trim().to_string();
 
+    if !is_appropriate_name(&name) {
+        ctx.say(
+            "❌ Invalid tree name. Please ensure that the name is appropriate!",
+        )
+        .await?;
+
+        info!("Inappropriate name \"{}\" submitted by {}", name, ctx.author().tag());
+        return Ok(());
+    }
+
     if !is_valid_tree_name(&name) {
         ctx.say(
             "❌ Invalid tree name. Please ensure it is between 3 and 32 alphabetic characters.",
@@ -156,6 +166,19 @@ pub async fn submit(
     }
 
     Ok(())
+}
+
+const FORBIDDEN_LIST: &str = include_str!("../../../../extra/banned_words.txt");
+
+fn is_appropriate_name(name: &str) -> bool {
+    let lowercase = name.to_lowercase();
+    for chunk in FORBIDDEN_LIST.split('\n') {
+        if lowercase.contains(chunk) {
+            return false
+        }
+    }
+
+    true
 }
 
 fn is_valid_tree_name(name: &str) -> bool {

@@ -1,3 +1,5 @@
+use std::collections::hash_map::Entry;
+
 use crate::{
     modules::lorax::database::{LoraxEvent, LoraxStage},
     Context, Error,
@@ -99,7 +101,6 @@ pub async fn submit(
         return Ok(());
     }
 
-   
     match fetch_node_names().await {
         Ok(node_names) => {
             if node_names.contains(&name) {
@@ -112,7 +113,6 @@ pub async fn submit(
         }
         Err(e) => {
             error!("Failed to fetch node names: {}", e);
-           
         }
     }
 
@@ -161,7 +161,7 @@ pub async fn submit(
 fn is_valid_tree_name(name: &str) -> bool {
     let name = name.trim();
     let length = name.len();
-    length >= 3 && length <= 32 && name.chars().all(|c| c.is_ascii_alphabetic())
+    (3..=32).contains(&length) && name.chars().all(|c| c.is_ascii_alphabetic())
 }
 
 #[command(slash_command, guild_only, ephemeral)]
@@ -321,12 +321,12 @@ pub async fn vote(ctx: Context<'_>) -> Result<(), Error> {
                                 .get_mut(&guild_id)
                                 .ok_or_else(|| "No active event".to_string())?;
 
-                            if event.tree_votes.contains_key(&user_id) {
-                                return Err("You've already voted!".to_string());
+                            if let Entry::Vacant(e) = event.tree_votes.entry(user_id) {
+                                e.insert(selected_tree.to_string());
+                                Ok(())
+                            } else {
+                                Err("You've already voted!".to_string())
                             }
-
-                            event.tree_votes.insert(user_id, selected_tree.to_string());
-                            Ok(())
                         })
                         .await
                     {
@@ -341,7 +341,7 @@ pub async fn vote(ctx: Context<'_>) -> Result<(), Error> {
                     return Err("Invalid interaction data kind".into());
                 }
             }
-            _ => {}
+            _ => return Err("Unexpected event type id".into()),
         }
     }
 

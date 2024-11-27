@@ -77,7 +77,10 @@ impl LoraxEventTask {
                 }
                 event.start_time = get_current_timestamp();
             }
-            _ => {}
+            LoraxStage::Completed => {
+                event.stage = LoraxStage::Inactive;
+            }
+            LoraxStage::Inactive => return,
         }
         self.send_stage_message(ctx, event).await;
     }
@@ -110,7 +113,6 @@ impl LoraxEventTask {
             let stage_duration = self.calculate_stage_duration(&event);
             let elapsed_time = current_time.saturating_sub(event.start_time);
 
-           
             if elapsed_time > stage_duration {
                 let mut updated_event = event.clone();
                 self.advance_stage(ctx, &mut updated_event).await;
@@ -163,7 +165,7 @@ impl LoraxEventTask {
                         event.tree_votes.len()
                     )
                 },
-                LoraxStage::Inactive => "Event is inactive".to_string(),
+                LoraxStage::Inactive => return,
             };
 
             if let Ok(channel) = ctx.http.get_channel(ChannelId::new(channel_id)).await {

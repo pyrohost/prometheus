@@ -15,7 +15,7 @@ pub trait Task: Send + Sync + std::fmt::Debug {
     fn box_clone(&self) -> Box<dyn Task>;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct TaskManager {
     tasks: Mutex<Vec<Box<dyn Task>>>,
     handles: Mutex<Vec<JoinHandle<()>>>,

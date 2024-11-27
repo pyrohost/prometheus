@@ -1,7 +1,8 @@
 use futures::future::join_all;
+use futures::StreamExt;
 use poise::serenity_prelude::Context;
 use std::time::Duration;
-use tokio::sync::Mutex;
+use tokio::sync::{broadcast, Mutex};
 use tokio::task::JoinHandle;
 
 #[async_trait::async_trait]
@@ -15,17 +16,32 @@ pub trait Task: Send + Sync + std::fmt::Debug {
     fn box_clone(&self) -> Box<dyn Task>;
 }
 
-#[derive(Debug, Default)]
+impl Clone for Box<dyn Task> {
+    fn clone(&self) -> Self {
+        self.box_clone()
+    }
+}
+
+#[derive(Debug)]
 pub struct TaskManager {
     tasks: Mutex<Vec<Box<dyn Task>>>,
     handles: Mutex<Vec<JoinHandle<()>>>,
+    shutdown_tx: broadcast::Sender<()>,
+}
+
+impl Default for TaskManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TaskManager {
     pub fn new() -> Self {
+        let (shutdown_tx, _) = broadcast::channel(1);
         Self {
             tasks: Mutex::new(Vec::new()),
             handles: Mutex::new(Vec::new()),
+            shutdown_tx,
         }
     }
 
@@ -37,13 +53,35 @@ impl TaskManager {
         let mut tasks = self.tasks.lock().await;
         let mut handles = self.handles.lock().await;
 
-        for task in tasks.drain(..) {
+        for chunk in tasks.drain(..).collect::<Vec<_>>().chunks(10) {
+            let tasks_chunk = chunk.iter().map(|t| t.box_clone()).collect::<Vec<_>>();
             let ctx = ctx.clone();
+            let mut shutdown_rx = self.shutdown_tx.subscribe();
+
             let handle = tokio::spawn(async move {
-                let mut task = task;
-                while let Some(interval) = task.schedule() {
-                    task.execute(&ctx).await.ok();
-                    tokio::time::sleep(interval).await;
+                let mut intervals = futures::stream::FuturesUnordered::new();
+                
+                for mut task in tasks_chunk {
+                    if let Some(interval) = task.schedule() {
+                        let ctx = ctx.clone();
+                        intervals.push(tokio::spawn(async move {
+                            loop {
+                                task.execute(&ctx).await.ok();
+                                tokio::time::sleep(interval).await;
+                            }
+                        }));
+                    }
+                }
+
+                tokio::select! {
+                    _ = shutdown_rx.recv() => {
+                        for interval in intervals {
+                            interval.abort();
+                        }
+                    }
+                    _ = async {
+                        while intervals.next().await.is_some() {}
+                    } => {}
                 }
             });
             handles.push(handle);
@@ -51,10 +89,8 @@ impl TaskManager {
     }
 
     pub async fn shutdown(&self) {
+        let _ = self.shutdown_tx.send(());
         let mut handles = self.handles.lock().await;
-        for handle in handles.iter_mut() {
-            handle.abort();
-        }
         join_all(handles.iter_mut()).await;
     }
 }

@@ -1,20 +1,28 @@
 use crate::modules::lorax::database::LoraxHandler;
 use databases::Databases;
-use modules::lorax::task::LoraxEventTask;
+use modules::{
+    lorax::{commands::lorax, task::LoraxEventTask},
+    system::events::ReadyHandler,
+};
 use poise::serenity_prelude::{self as serenity, CreateAllowedMentions};
 use std::sync::Arc;
+use tasks::TaskManager;
 use tracing::{error, info, trace};
 
 mod database;
 mod databases;
+mod events;
 mod modules;
 mod tasks;
 mod utils;
 
+use crate::events::EventManager;
+
 #[derive(Clone, Debug)]
 pub struct Data {
     pub dbs: Arc<Databases>,
-    pub task_manager: Arc<tasks::TaskManager>,
+    pub task_manager: Arc<TaskManager>,
+    pub event_manager: Arc<EventManager>,
 }
 
 impl Data {
@@ -60,7 +68,7 @@ async fn main() {
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions::<Data, Error> {
             allowed_mentions: Some(CreateAllowedMentions::new().empty_roles().empty_users()),
-            commands: vec![register(), modules::lorax::commands::lorax()],
+            commands: vec![register(), lorax()],
             pre_command: |ctx| {
                 Box::pin(async move {
                     trace!(
@@ -100,6 +108,12 @@ async fn main() {
                     }
                 })
             },
+            event_handler: |ctx, event, _framework, data| {
+                Box::pin(async move {
+                    data.event_manager.handle_event(ctx, &event).await;
+                    Ok(())
+                })
+            },
             ..Default::default()
         })
         .setup(|ctx, _ready, framework| {
@@ -109,7 +123,15 @@ async fn main() {
 
                 let dbs = Arc::new(Databases::default().await?);
                 let task_manager = Arc::new(tasks::TaskManager::new());
-                let data = Data { dbs, task_manager };
+                let event_manager = Arc::new(events::EventManager::new());
+
+                event_manager.add_handler(ReadyHandler).await;
+
+                let data = Data {
+                    dbs,
+                    task_manager,
+                    event_manager,
+                };
                 data.init_tasks(ctx).await;
 
                 Ok(data)

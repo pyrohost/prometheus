@@ -1,6 +1,6 @@
 use poise::command;
 
-pub mod events;
+pub mod admin;
 pub mod settings;
 pub mod users;
 
@@ -8,16 +8,15 @@ pub mod users;
 #[command(
     slash_command,
     subcommands(
-        "events::start",
-        "events::end",
-        "events::status",
-        "events::duration",
-        "events::force_advance",
-        "events::reset",
-        "events::submissions",
-        "events::votes",
-        "events::remove_submission",
-        "events::remove_vote",
+        "admin::start",
+        "admin::end",
+        "admin::duration",
+        "admin::force_advance",
+        "admin::reset",
+        "admin::submissions",
+        "admin::votes",
+        "admin::remove_submission",
+        "admin::remove_vote",
         "settings::channel",
         "settings::roles",
         "settings::durations",

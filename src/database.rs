@@ -1,4 +1,6 @@
+use lru::LruCache;
 use serde::{de::DeserializeOwned, Serialize};
+use std::num::NonZeroUsize;
 use std::{path::Path, sync::Arc, time::Duration};
 use thiserror::Error;
 use tokio::{fs, sync::RwLock, time};
@@ -19,6 +21,7 @@ pub enum DbError {
 pub struct Database<T: Serialize + DeserializeOwned + Default + Send + Sync + 'static> {
     data: Arc<RwLock<T>>,
     path: String,
+    cache: Arc<RwLock<LruCache<String, Vec<u8>>>>,
 }
 
 impl<T: Serialize + DeserializeOwned + Default + Send + Sync + 'static> Database<T> {
@@ -33,6 +36,7 @@ impl<T: Serialize + DeserializeOwned + Default + Send + Sync + 'static> Database
         let db = Self {
             data: Arc::new(RwLock::new(T::default())),
             path,
+            cache: Arc::new(RwLock::new(LruCache::new(NonZeroUsize::new(100).unwrap()))),
         };
 
         if Path::new(&db.path).exists() {
@@ -67,13 +71,20 @@ impl<T: Serialize + DeserializeOwned + Default + Send + Sync + 'static> Database
 
         let data = self.data.read().await;
         let bytes = bincode::serialize(&*data).map_err(|e| DbError::Codec(e.to_string()))?;
+        self.cache.write().await.put(self.path.clone(), bytes.clone());
         fs::write(&self.path, bytes).await?;
         Ok(())
     }
 
     /// Loads the state from disk
     async fn load(&self) -> Result<(), DbError> {
-        let bytes = fs::read(&self.path).await?;
+        let bytes = if let Some(cached) = self.cache.write().await.get(&self.path) {
+            cached.clone()
+        } else {
+            let bytes = fs::read(&self.path).await?;
+            self.cache.write().await.put(self.path.clone(), bytes.clone());
+            bytes
+        };
         let decoded = bincode::deserialize(&bytes).map_err(|e| DbError::Codec(e.to_string()))?;
         *self.data.write().await = decoded;
         Ok(())

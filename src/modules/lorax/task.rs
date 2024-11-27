@@ -134,11 +134,16 @@ impl LoraxEventTask {
                     "{role_ping}🌿 New Lorax event! Submit your tree name with `/lorax submit`. Submissions close <t:{}:R>",
                     event.get_stage_end_timestamp(self.calculate_stage_duration(event))
                 ),
-                LoraxStage::Voting => format!(
+                LoraxStage::Voting => if event.tree_submissions.is_empty() {
+                    // If we have no submissions, just move to inactive.
+                    event.stage = LoraxStage::Inactive;
+                    format!("{role_ping}🗳️ Not enough submissions to start a vote!")
+                } else {
+                    format!(
                     "{role_ping}🗳️ Time to vote! {} entries submitted. Use `/lorax vote` to choose your favorite. Voting ends <t:{}:R>",
                     event.current_trees.len(),
-                    event.get_stage_end_timestamp(self.calculate_stage_duration(event))
-                ),
+                    event.get_stage_end_timestamp(self.calculate_stage_duration(event)))
+                }
                 LoraxStage::Tiebreaker(round) => format!(
                     "{role_ping}🎯 Tiebreaker Round {}! {} entries tied. Vote again with `/lorax vote`. Ends <t:{}:R>",
                     round,

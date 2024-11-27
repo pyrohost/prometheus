@@ -11,6 +11,9 @@ use tracing::error;
 /// Kick off a new Lorax event for your community!
 #[command(slash_command, guild_only, required_permissions = "MANAGE_GUILD")]
 pub async fn start(ctx: Context<'_>) -> Result<(), Error> {
+    // Defer the interaction immediately
+    ctx.defer().await?;
+
     let guild_id = ctx.guild_id().unwrap().get();
 
     if let Some(event) = ctx.data().dbs.lorax.get_event(guild_id).await {
@@ -189,126 +192,6 @@ pub async fn force_advance(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-/// Get detailed stats about the Lorax event
-#[command(slash_command, guild_only)]
-pub async fn stats(ctx: Context<'_>) -> Result<(), Error> {
-    let guild_id = ctx.guild_id().unwrap().get();
-
-    let event = match ctx.data().dbs.lorax.get_event(guild_id).await {
-        Some(event) => event,
-        None => {
-            ctx.say("⚪ No active Lorax event is running.").await?;
-            return Ok(());
-        }
-    };
-
-    let lorax_task = LoraxEventTask::new(guild_id, Arc::new(ctx.data().dbs.lorax.clone()));
-    let duration = lorax_task.calculate_stage_duration(&event);
-    let end_time = event.start_time + duration;
-
-    let medal_emojis = ["🥇", "🥈", "🥉"];
-
-    let stage_info = match &event.stage {
-        LoraxStage::Submission => format!(
-            "🌿 **Submission Phase**\n\
-            Submissions: {}\n\
-            Most Recent: {}",
-            event.tree_submissions.len(),
-            event
-                .tree_submissions
-                .iter()
-                .last()
-                .map(|(id, name)| format!("\"{}\" (by <@{}>)", name, id))
-                .unwrap_or_else(|| "None".to_string())
-        ),
-        stage @ (LoraxStage::Voting | LoraxStage::Tiebreaker(_)) => {
-            let mut msg = if let LoraxStage::Tiebreaker(round) = stage {
-                format!("🎯 **Tiebreaker Round {}**\n", round)
-            } else {
-                "🗳️ **Voting Phase**\n".to_string()
-            };
-
-            msg.push_str(&format!(
-                "Votes Cast: {}/{} possible\n\
-                Participation: {}%\n\n\
-                Current Standings:",
-                event.tree_votes.len(),
-                event.tree_submissions.len().max(1) - 1,
-                (event.tree_votes.len() as f32 / (event.tree_submissions.len().max(1) - 1) as f32
-                    * 100.0) as u32
-            ));
-
-            for (i, tree) in event.current_trees.iter().take(3).enumerate() {
-                let medal = medal_emojis.get(i).unwrap_or(&"").to_string();
-                if let Some(submitter_id) = event.get_tree_submitter(tree) {
-                    msg.push_str(&format!("\n{} {} (by <@{}>)", medal, tree, submitter_id));
-                } else {
-                    msg.push_str(&format!("\n{} {}", medal, tree));
-                }
-            }
-
-            if event.current_trees.len() > 3 {
-                msg.push_str(&format!(
-                    "\n\n... and {} other entries in the running!",
-                    event.current_trees.len() - 3
-                ));
-            }
-            msg
-        }
-        LoraxStage::Completed => {
-            let mut msg = format!(
-                "✨ **Event Completed**\n\
-                Total Submissions: {}\n\
-                Final Vote Count: {}\n\n\
-                ���� Final Results:",
-                event.tree_submissions.len(),
-                event.tree_votes.len()
-            );
-
-            for (i, tree) in event.current_trees.iter().enumerate() {
-                let medal = medal_emojis.get(i).unwrap_or(&"").to_string();
-                if let Some(submitter_id) = event.get_tree_submitter(tree) {
-                    msg.push_str(&format!("\n{} {} (by <@{}>)", medal, tree, submitter_id));
-                } else {
-                    msg.push_str(&format!("\n{} {}", medal, tree));
-                }
-            }
-
-            if event.current_trees.len() > 3 {
-                msg.push_str(&format!(
-                    "\n\n... and {} other runner-up{}!",
-                    event.current_trees.len() - 3,
-                    if event.current_trees.len() - 3 == 1 {
-                        ""
-                    } else {
-                        "s"
-                    }
-                ));
-            }
-            msg
-        }
-        LoraxStage::Inactive => "⚪ Event is inactive".to_string(),
-    };
-
-    let timing = if matches!(event.stage, LoraxStage::Completed | LoraxStage::Inactive) {
-        "Event has ended".to_string()
-    } else {
-        format!("Stage Ends: <t:{}:R>", end_time)
-    };
-
-    let msg = format!(
-        "📊 **Lorax Event Statistics**\n\n\
-        {}\n\n\
-        ⏰ **Timing**\n\
-        Started: <t:{}:F>\n\
-        {}",
-        stage_info, event.start_time, timing
-    );
-
-    ctx.say(msg).await?;
-    Ok(())
-}
-
 /// Adjust the current stage duration
 #[command(slash_command, guild_only, required_permissions = "MANAGE_GUILD")]
 pub async fn duration(
@@ -417,12 +300,7 @@ pub async fn reset(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// View all submissions and who submitted them
-#[command(
-    slash_command,
-    guild_only,
-    ephemeral,
-    required_permissions = "MANAGE_MESSAGES"
-)]
+#[command(slash_command, guild_only, ephemeral)]
 pub async fn submissions(ctx: Context<'_>) -> Result<(), Error> {
     let guild_id = ctx.guild_id().unwrap().get();
 
@@ -433,6 +311,19 @@ pub async fn submissions(ctx: Context<'_>) -> Result<(), Error> {
             return Ok(());
         }
     };
+
+    // todo: should use member_permissions_in instead of permissions due to deprecation,
+    // todo: i coudln't figure out how to use member_permissions_in though lol - ellie
+    let has_manage_messages = ctx.author_member().await.map_or(false, |m| {
+        m.permissions(ctx.serenity_context())
+            .map_or(false, |p| p.manage_messages())
+    });
+
+    if matches!(event.stage, LoraxStage::Submission) && !has_manage_messages {
+        ctx.say("❌ Cannot view submissions during the submission phase.")
+            .await?;
+        return Ok(());
+    }
 
     let mut submissions: Vec<_> = event
         .tree_submissions
@@ -456,12 +347,7 @@ pub async fn submissions(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// View current votes and who voted for what
-#[command(
-    slash_command,
-    guild_only,
-    ephemeral,
-    required_permissions = "MANAGE_MESSAGES"
-)]
+#[command(slash_command, guild_only, ephemeral)]
 pub async fn votes(ctx: Context<'_>) -> Result<(), Error> {
     let guild_id = ctx.guild_id().unwrap().get();
 
@@ -473,8 +359,17 @@ pub async fn votes(ctx: Context<'_>) -> Result<(), Error> {
         }
     };
 
-    if !matches!(event.stage, LoraxStage::Voting | LoraxStage::Tiebreaker(_)) {
-        ctx.say("❌ Voting is not currently active.").await?;
+    // todo: should use member_permissions_in instead of permissions due to deprecation,
+    // todo: i coudln't figure out how to use member_permissions_in though lol - ellie
+    let has_manage_messages = ctx.author_member().await.map_or(false, |m| {
+        m.permissions(ctx.serenity_context())
+            .map_or(false, |p| p.manage_messages())
+    });
+
+    // Only show votes after completion for non-staff
+    if !matches!(event.stage, LoraxStage::Completed) && !has_manage_messages {
+        ctx.say("❌ Votes can only be viewed after the event is completed.")
+            .await?;
         return Ok(());
     }
 

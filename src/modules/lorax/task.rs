@@ -3,7 +3,10 @@ use crate::{
     modules::lorax::database::{LoraxDatabase, LoraxEvent, LoraxSettings, LoraxStage},
     tasks::Task,
 };
-use poise::serenity_prelude::{ChannelId, Context, CreateMessage};
+use poise::serenity_prelude::{
+    AutoArchiveDuration, ChannelId, ChannelType, Context, CreateAllowedMentions, CreateMessage,
+    CreateThread, EditThread,
+};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -41,7 +44,7 @@ impl LoraxEventTask {
             LoraxStage::Submission => event.settings.submission_duration = duration_min,
             LoraxStage::Voting => event.settings.voting_duration = duration_min,
             LoraxStage::Tiebreaker(_) => event.settings.tiebreaker_duration = duration_min,
-            _ => {},
+            _ => {}
         }
     }
 
@@ -131,7 +134,7 @@ impl LoraxEventTask {
 
             let content = match event.stage {
                 LoraxStage::Submission => format!(
-                    "{role_ping}🌿 New Lorax event! Submit your tree name with `/lorax submit`. Submissions close <t:{}:R>",
+                    "{role_ping}🌿 New Lorax event! Submit your tree name with `/lorax submit`.\nSubmissions close <t:{}:R>",
                     event.get_stage_end_timestamp(self.calculate_stage_duration(event))
                 ),
                 LoraxStage::Voting => if event.tree_submissions.is_empty() {
@@ -140,12 +143,12 @@ impl LoraxEventTask {
                     format!("{role_ping}🗳️ Not enough submissions to start a vote!")
                 } else {
                     format!(
-                    "{role_ping}🗳️ Time to vote! {} entries submitted. Use `/lorax vote` to choose your favorite. Voting ends <t:{}:R>",
+                    "{role_ping}🗳️ Time to vote! {} entries submitted. Use `/lorax vote` to choose your favorite.\nVoting ends <t:{}:R>",
                     event.current_trees.len(),
                     event.get_stage_end_timestamp(self.calculate_stage_duration(event)))
                 }
                 LoraxStage::Tiebreaker(round) => format!(
-                    "{role_ping}🎯 Tiebreaker Round {}! {} entries tied. Vote again with `/lorax vote`. Ends <t:{}:R>",
+                    "{role_ping}🎯 Tiebreaker Round {}! {} entries tied. Vote again with `/lorax vote`.\nEnds <t:{}:R>",
                     round,
                     event.current_trees.len(),
                     event.get_stage_end_timestamp(self.calculate_stage_duration(event))
@@ -175,13 +178,50 @@ impl LoraxEventTask {
 
             if let Ok(channel) = ctx.http.get_channel(ChannelId::new(channel_id)).await {
                 if let Some(text_channel) = channel.guild() {
-                    let msg = CreateMessage::default().content(&content);
+                    let msg = CreateMessage::default().content(&content).allowed_mentions(
+                        CreateAllowedMentions::new()
+                            .roles(vec![event.settings.lorax_role.unwrap_or_default()]),
+                    );
                     if let Ok(message) = text_channel.send_message(ctx, msg).await {
                         match event.stage {
                             LoraxStage::Submission => {
                                 event.stage_message_id = Some(message.id.get())
                             }
-                            LoraxStage::Voting => event.voting_message_id = Some(message.id.get()),
+                            LoraxStage::Voting => {
+                                event.voting_message_id = Some(message.id.get());
+
+                                if let Ok(thread) = text_channel
+                                    .create_thread_from_message(
+                                        ctx,
+                                        message.id,
+                                        CreateThread::new("Campaign Thread")
+                                            .kind(ChannelType::PublicThread)
+                                            .auto_archive_duration(AutoArchiveDuration::OneDay),
+                                    )
+                                    .await
+                                {
+                                    event.campaign_thread_id = Some(thread.id.get());
+                                    let welcome_msg = CreateMessage::default()
+                                        .content("🎭 Welcome to the campaign thread! Tree submitters can campaign for their entries here. Good luck!");
+                                    let _ = thread.send_message(ctx, welcome_msg).await;
+                                }
+                            }
+                            LoraxStage::Completed => {
+                                if let Some(thread_id) = event.campaign_thread_id {
+                                    if let Ok(thread) =
+                                        ctx.http.get_channel(ChannelId::new(thread_id)).await
+                                    {
+                                        if let Some(mut thread) = thread.guild() {
+                                            let _ = thread
+                                                .edit_thread(
+                                                    ctx,
+                                                    EditThread::new().locked(true).archived(true),
+                                                )
+                                                .await;
+                                        }
+                                    }
+                                }
+                            }
                             LoraxStage::Tiebreaker(_) => {
                                 event.tiebreaker_message_id = Some(message.id.get())
                             }

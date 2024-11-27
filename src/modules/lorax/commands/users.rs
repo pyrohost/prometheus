@@ -171,13 +171,21 @@ pub async fn submit(
 const FORBIDDEN_LIST: &str = include_str!("../../../../extra/banned_words.txt");
 
 fn is_appropriate_name(name: &str) -> bool {
-    let lowercase = name.to_lowercase();
-    for chunk in FORBIDDEN_LIST.split('\n') {
-        if lowercase.contains(chunk) {
-            return false
+    let name = name.to_lowercase();
+    let words: Vec<&str> = name.split_whitespace().collect();
+    
+    for forbidden in FORBIDDEN_LIST.lines() {
+        let forbidden = forbidden.trim().to_lowercase();
+        if forbidden.is_empty() {
+            continue;
+        }
+        
+        for word in &words {
+            if *word == forbidden {
+                return false;
+            }
         }
     }
-
     true
 }
 

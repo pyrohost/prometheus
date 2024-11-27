@@ -11,7 +11,6 @@ pub mod users;
         "events::start",
         "events::end",
         "events::status",
-        "events::stats",
         "events::duration",
         "events::force_advance",
         "events::reset",

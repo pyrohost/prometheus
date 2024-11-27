@@ -35,6 +35,16 @@ impl LoraxEventTask {
         }
     }
 
+    pub fn adjust_stage_duration(&self, event: &mut LoraxEvent, duration_sec: u64) {
+        let duration_min = duration_sec.saturating_div(60);
+        match event.stage {
+            LoraxStage::Submission => event.settings.submission_duration = duration_min,
+            LoraxStage::Voting => event.settings.voting_duration = duration_min,
+            LoraxStage::Tiebreaker(_) => event.settings.tiebreaker_duration = duration_min,
+            _ => {},
+        }
+    }
+
     pub async fn start_event(&mut self, settings: LoraxSettings, ctx: &Context) {
         let event = LoraxEvent::new(settings, get_current_timestamp());
         let _ = self.db.update_event(self.guild_id, event).await;

@@ -23,7 +23,7 @@ pub async fn start(ctx: Context<'_>) -> Result<(), Error> {
     let settings = ctx.data().dbs.lorax.get_settings(guild_id).await?;
 
     if settings.lorax_channel.is_none() {
-        ctx.say("❌ Please set a Lorax channel first using `/lorax config channel`")
+        ctx.say("❌ Please set a Lorax channel first using `/lorax channel`")
             .await?;
         return Ok(());
     }
@@ -330,23 +330,20 @@ pub async fn duration(
             .await?;
         return Ok(());
     }
+    // NOTE:we should consider naming our variables like `current_duration_secs`
+    // just so its immediately obvious what unit it uses.
 
-    let adjusted_duration = (minutes * 60) as i64;
+    let lorax_task = LoraxEventTask::new(guild_id, Arc::new(ctx.data().dbs.lorax.clone()));
+    let current_duration = lorax_task.calculate_stage_duration(&event);
+
+    let adjusted_duration = (current_duration as i64) + (minutes * 60);
     if adjusted_duration < 0 {
         ctx.say("❌ Duration cannot be negative.").await?;
         return Ok(());
     }
 
-    let lorax_task = LoraxEventTask::new(guild_id, Arc::new(ctx.data().dbs.lorax.clone()));
-
-    let current_duration = lorax_task.calculate_stage_duration(&event);
-    let new_duration = (current_duration as i64 + (minutes * 60)) as u64;
-
-    let current_time = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    event.start_time = current_time - (current_duration - new_duration);
+    let new_duration = adjusted_duration as u64;
+    lorax_task.adjust_stage_duration(&mut event, new_duration);
 
     if let Some(channel_id) = event.settings.lorax_channel {
         let change_type = if minutes > 0 { "extended" } else { "reduced" };

@@ -2,6 +2,7 @@ use crate::modules::lorax::database::LoraxHandler;
 use databases::Databases;
 use modules::{
     lorax::{commands::lorax, task::LoraxEventTask},
+    stats::{stats, task::StatsTask},
     system::events::ReadyHandler,
 };
 use poise::serenity_prelude::{self as serenity, CreateAllowedMentions};
@@ -37,6 +38,9 @@ impl Data {
             self.task_manager.add_task(lorax_task).await;
         }
 
+        let stats_task = StatsTask::new(self.dbs.stats.clone());
+        self.task_manager.add_task(stats_task).await;
+
         self.task_manager.start_tasks(ctx.clone()).await;
     }
 }
@@ -68,7 +72,7 @@ async fn main() {
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions::<Data, Error> {
             allowed_mentions: Some(CreateAllowedMentions::new().empty_roles().empty_users()),
-            commands: vec![register(), lorax()],
+            commands: vec![register(), lorax(), stats()],
             pre_command: |ctx| {
                 Box::pin(async move {
                     trace!(

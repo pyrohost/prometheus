@@ -94,12 +94,14 @@ pub async fn submit(
     let name = name.to_lowercase().trim().to_string();
 
     if !is_appropriate_name(&name) {
-        ctx.say(
-            "❌ Invalid tree name. Please ensure that the name is appropriate!",
-        )
-        .await?;
+        ctx.say("❌ Invalid tree name. Please ensure that the name is appropriate!")
+            .await?;
 
-        info!("Inappropriate name \"{}\" submitted by {}", name, ctx.author().tag());
+        info!(
+            "Inappropriate name \"{}\" submitted by {}",
+            name,
+            ctx.author().tag()
+        );
         return Ok(());
     }
 
@@ -173,13 +175,13 @@ const FORBIDDEN_LIST: &str = include_str!("../../../../extra/banned_words.txt");
 fn is_appropriate_name(name: &str) -> bool {
     let name = name.to_lowercase();
     let words: Vec<&str> = name.split_whitespace().collect();
-    
+
     for forbidden in FORBIDDEN_LIST.lines() {
         let forbidden = forbidden.trim().to_lowercase();
         if forbidden.is_empty() {
             continue;
         }
-        
+
         for word in &words {
             if *word == forbidden {
                 return false;
@@ -241,7 +243,7 @@ pub async fn vote(ctx: Context<'_>) -> Result<(), Error> {
                         .collect(),
                 },
             )
-            .placeholder("Choose wisely..."),
+            .placeholder("Choose a tree to vote for (you can't vote for your own)"),
         )];
 
         if total_pages > 1 {
@@ -278,7 +280,7 @@ pub async fn vote(ctx: Context<'_>) -> Result<(), Error> {
                         .collect(),
                 },
             )
-            .placeholder("Choose wisely..."),
+            .placeholder("Choose a tree to vote for (you can't vote for your own)"),
         )];
 
         if total_pages > 1 {
@@ -346,30 +348,53 @@ pub async fn vote(ctx: Context<'_>) -> Result<(), Error> {
                         .data()
                         .dbs
                         .lorax
-                        .write(|db| {
+                        .transaction(|db| {
                             let event = db
                                 .events
                                 .get_mut(&guild_id)
                                 .ok_or_else(|| "No active event".to_string())?;
 
-                            if let Entry::Vacant(e) = event.tree_votes.entry(user_id) {
-                                e.insert(selected_tree.to_string());
-                                Ok(())
+                            let old_vote =
+                                event.tree_votes.insert(user_id, selected_tree.to_string());
+
+                            if let Some(old) = old_vote {
+                                Ok(format!(
+                                    "Changed vote from \"{}\" to \"{}\"",
+                                    old, selected_tree
+                                ))
                             } else {
-                                Err("You've already voted!".to_string())
+                                Ok("Vote recorded!".to_string())
                             }
                         })
                         .await
                     {
-                        Ok(_) => {
-                            ctx.say("✅ Vote recorded!").await?;
+                        Ok(msg) => {
+                            interaction
+                                .create_response(
+                                    &ctx.serenity_context().http,
+                                    CreateInteractionResponse::UpdateMessage(
+                                        CreateInteractionResponseMessage::new()
+                                            .content(format!("✅ {}", msg))
+                                            .components(vec![]),
+                                    ),
+                                )
+                                .await?;
+                            return Ok(());
                         }
                         Err(e) => {
-                            ctx.say(format!("❌ Unable to cast vote: {}", e)).await?;
+                            interaction
+                                .create_response(
+                                    &ctx.serenity_context().http,
+                                    CreateInteractionResponse::UpdateMessage(
+                                        CreateInteractionResponseMessage::new()
+                                            .content(format!("❌ Unable to cast vote: {}", e))
+                                            .components(vec![]),
+                                    ),
+                                )
+                                .await?;
+                            return Ok(());
                         }
                     }
-                } else {
-                    return Err("Invalid interaction data kind".into());
                 }
             }
             _ => return Err("Unexpected event type id".into()),

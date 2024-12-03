@@ -1,9 +1,10 @@
 use crate::database::Database;
-use crate::modules::lorax::database::LoraxDatabase;
+use crate::modules::{lorax::database::LoraxDatabase, stats::database::StatsDatabase};
 
 #[derive(Debug)]
 pub struct Databases {
     pub lorax: Database<LoraxDatabase>,
+    pub stats: Database<StatsDatabase>,
 }
 
 impl Default for Databases {
@@ -13,9 +14,10 @@ impl Default for Databases {
 }
 
 impl Databases {
-    pub async fn default() -> Result<Self, crate::database::DbError> {
+    pub async fn default() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         Ok(Self {
             lorax: Database::new("data/lorax.db").await?,
+            stats: Database::new("data/stats.db").await?,
         })
     }
 }

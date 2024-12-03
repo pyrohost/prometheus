@@ -11,7 +11,6 @@ use tracing::error;
 /// Kick off a new Lorax event for your community!
 #[command(slash_command, guild_only, required_permissions = "MANAGE_GUILD")]
 pub async fn start(ctx: Context<'_>) -> Result<(), Error> {
-    // Defer the interaction immediately
     ctx.defer().await?;
 
     let guild_id = ctx.guild_id().unwrap().get();
@@ -127,8 +126,6 @@ pub async fn duration(
             .await?;
         return Ok(());
     }
-    // NOTE:we should consider naming our variables like `current_duration_secs`
-    // just so its immediately obvious what unit it uses.
 
     let lorax_task = LoraxEventTask::new(guild_id, Arc::new(ctx.data().dbs.lorax.clone()));
     let current_duration = lorax_task.calculate_stage_duration(&event);
@@ -193,7 +190,7 @@ pub async fn reset(ctx: Context<'_>) -> Result<(), Error> {
         .data()
         .dbs
         .lorax
-        .write(|db| {
+        .transaction(|db| {
             db.events.remove(&guild_id);
             db.settings.remove(&guild_id);
             Ok(())
@@ -226,11 +223,9 @@ pub async fn submissions(ctx: Context<'_>) -> Result<(), Error> {
         }
     };
 
-    // todo: should use member_permissions_in instead of permissions due to deprecation,
-    // todo: i coudln't figure out how to use member_permissions_in though lol - ellie
     let has_manage_messages = ctx.author_member().await.map_or(false, |m| {
-        m.permissions(ctx.serenity_context())
-            .map_or(false, |p| p.manage_messages())
+        ctx.guild()
+            .map_or(false, |g| g.member_permissions(&m).manage_messages())
     });
 
     if matches!(event.stage, LoraxStage::Submission) && !has_manage_messages {
@@ -274,8 +269,8 @@ pub async fn votes(ctx: Context<'_>) -> Result<(), Error> {
     };
 
     let has_manage_messages = ctx.author_member().await.map_or(false, |m| {
-        m.permissions(ctx.serenity_context())
-            .map_or(false, |p| p.manage_messages())
+        ctx.guild()
+            .map_or(false, |g| g.member_permissions(&m).manage_messages())
     });
 
     if !matches!(event.stage, LoraxStage::Completed) && !has_manage_messages {
@@ -285,14 +280,13 @@ pub async fn votes(ctx: Context<'_>) -> Result<(), Error> {
     }
 
     let total_votes = event.tree_votes.len();
-    
-    // Count votes per tree
-    let mut vote_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+
+    let mut vote_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
     for tree in event.tree_votes.values() {
         *vote_counts.entry(tree.clone()).or_insert(0) += 1;
     }
 
-    // Convert to vec for sorting
     let mut vote_counts: Vec<_> = vote_counts.into_iter().collect();
     vote_counts.sort_by(|a, b| b.1.cmp(&a.1));
 

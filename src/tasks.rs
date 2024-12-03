@@ -60,7 +60,7 @@ impl TaskManager {
 
             let handle = tokio::spawn(async move {
                 let mut intervals = futures::stream::FuturesUnordered::new();
-                
+
                 for mut task in tasks_chunk {
                     if let Some(interval) = task.schedule() {
                         let ctx = ctx.clone();

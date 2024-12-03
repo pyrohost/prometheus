@@ -61,7 +61,7 @@ pub async fn channel(
         .data()
         .dbs
         .lorax
-        .write(|db| {
+        .transaction(|db| {
             let settings = db.settings.entry(guild_id).or_default();
             settings.lorax_channel = Some(channel_id);
             Ok(())
@@ -131,7 +131,7 @@ pub async fn roles(
     ctx.data()
         .dbs
         .lorax
-        .write(|db| {
+        .transaction(|db| {
             let settings = db.settings.entry(guild_id).or_default();
             if let Some(role) = event_role {
                 settings.lorax_role = Some(role.id.get());
@@ -172,10 +172,8 @@ pub async fn durations(
         return Ok(());
     }
 
-   
     if let Some(mins) = submission {
         if mins < 1 || mins > 1440 {
-           
             ctx.say("❌ Submission duration must be between 1 and 1440 minutes.")
                 .await?;
             return Ok(());
@@ -200,7 +198,7 @@ pub async fn durations(
         .data()
         .dbs
         .lorax
-        .write(|db| {
+        .transaction(|db| {
             let settings = db.settings.entry(guild_id).or_default();
             if let Some(mins) = submission {
                 settings.submission_duration = mins;

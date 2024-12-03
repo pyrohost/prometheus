@@ -86,7 +86,7 @@ pub type LoraxHandler = Database<LoraxDatabase>;
 
 impl LoraxHandler {
     pub async fn get_event(&self, guild_id: u64) -> Option<LoraxEvent> {
-        self.read(|db| db.events.get(&guild_id).cloned()).await
+        self.get_data().await.events.get(&guild_id).cloned()
     }
 
     pub async fn submit_tree(
@@ -95,7 +95,7 @@ impl LoraxHandler {
         tree: String,
         user_id: u64,
     ) -> Result<(bool, Option<String>), String> {
-        self.write(|db| {
+        self.transaction(|db| {
             if let Some(event) = db.events.get_mut(&guild_id) {
                 let is_update = event.tree_submissions.contains_key(&user_id);
                 let old_submission = event.tree_submissions.insert(user_id, tree);
@@ -114,7 +114,7 @@ impl LoraxHandler {
         tree: String,
         user_id: u64,
     ) -> Result<bool, String> {
-        self.write(|db| {
+        self.transaction(|db| {
             if let Some(event) = db.events.get_mut(&guild_id) {
                 let is_update = event.tree_votes.contains_key(&user_id);
                 event.tree_votes.insert(user_id, tree);
@@ -128,7 +128,7 @@ impl LoraxHandler {
     }
 
     pub async fn update_event(&self, guild_id: u64, event: LoraxEvent) -> Result<(), String> {
-        self.write(|db| {
+        self.transaction(|db| {
             db.events.insert(guild_id, event);
             Ok(())
         })
@@ -138,12 +138,16 @@ impl LoraxHandler {
 
     pub async fn get_settings(&self, guild_id: u64) -> Result<LoraxSettings, String> {
         Ok(self
-            .read(|db| db.settings.get(&guild_id).cloned().unwrap_or_default())
-            .await)
+            .get_data()
+            .await
+            .settings
+            .get(&guild_id)
+            .cloned()
+            .unwrap_or_default())
     }
 
     pub async fn ensure_settings(&self, guild_id: u64) -> Result<LoraxSettings, String> {
-        self.write(|db| Ok(db.settings.entry(guild_id).or_default().clone()))
+        self.transaction(|db| Ok(db.settings.entry(guild_id).or_default().clone()))
             .await
             .map_err(|e| e.to_string())
     }

@@ -5,7 +5,7 @@ use crate::{
 };
 use poise::serenity_prelude::{
     AutoArchiveDuration, ChannelId, ChannelType, Context, CreateAllowedMentions, CreateMessage,
-    CreateThread, EditThread,
+    CreateThread, EditThread, RoleId,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -61,6 +61,55 @@ impl LoraxEventTask {
         }
     }
 
+    fn get_winners(&self, event: &LoraxEvent) -> Vec<(String, usize)> {
+        let mut vote_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for tree in event.tree_votes.values() {
+            *vote_counts.entry(tree.clone()).or_insert(0) += 1;
+        }
+
+        let mut winners: Vec<_> = vote_counts.into_iter().collect();
+        winners.sort_by(|a, b| b.1.cmp(&a.1));
+        winners
+    }
+
+    async fn handle_winner_roles(&self, ctx: &Context, event: &LoraxEvent) {
+        let guild_id = self.guild_id.into();
+
+        let winner_role = event.settings.winner_role.map(RoleId::new);
+        let alumni_role = event.settings.alumni_role.map(RoleId::new);
+
+        if winner_role.is_none() && alumni_role.is_none() {
+            return;
+        }
+
+        let winners = self.get_winners(event);
+        if winners.is_empty() {
+            return;
+        }
+
+        if let (Some(winner_role), Some(alumni_role)) = (winner_role, alumni_role) {
+            if let Ok(guild) = ctx.http.get_guild(guild_id).await {
+                if let Ok(members) = guild.members(ctx, Some(1000), None).await {
+                    for member in members {
+                        if member.roles.contains(&winner_role) {
+                            let _ = member.remove_role(ctx, winner_role).await;
+                            let _ = member.add_role(ctx, alumni_role).await;
+                        }
+                    }
+                }
+
+                if let Some((winning_tree, _)) = winners.first() {
+                    if let Some(winner_id) = event.get_tree_submitter(winning_tree) {
+                        if let Ok(member) = guild.member(ctx, winner_id).await {
+                            let _ = member.add_role(ctx, winner_role).await;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     pub async fn advance_stage(&mut self, ctx: &Context, event: &mut LoraxEvent) {
         match event.stage {
             LoraxStage::Submission => {
@@ -71,6 +120,11 @@ impl LoraxEventTask {
             LoraxStage::Voting => {
                 event.stage = LoraxStage::Completed;
                 event.start_time = get_current_timestamp();
+
+                let winners = self.get_winners(event);
+                event.current_trees = winners.into_iter().map(|(tree, _)| tree).collect();
+
+                self.handle_winner_roles(ctx, event).await;
             }
             LoraxStage::Tiebreaker(round) => {
                 if (round) >= 3 {
@@ -94,7 +148,7 @@ impl LoraxEventTask {
             self.send_stage_message(ctx, &mut event).await;
 
             self.db
-                .write(|db| {
+                .transaction(|db| {
                     db.events.remove(&self.guild_id);
                     Ok(())
                 })
@@ -138,7 +192,6 @@ impl LoraxEventTask {
                     event.get_stage_end_timestamp(self.calculate_stage_duration(event))
                 ),
                 LoraxStage::Voting => if event.tree_submissions.is_empty() {
-                    // If we have no submissions, just move to inactive.
                     event.stage = LoraxStage::Inactive;
                     format!("{role_ping}🗳️ Not enough submissions to start a vote!")
                 } else {

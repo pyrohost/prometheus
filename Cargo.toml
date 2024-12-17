@@ -1,22 +1,24 @@
 [package]
-name = "prometheus"
+name = "pyrobot"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 async-trait = "0.1.77"
-time = { version = "0.3", features = ["formatting"] }
+time = { version = "0.3.37", features = ["formatting"] }
 bincode = "1.3.3"
-poise = { git = "https://github.com/serenity-rs/poise", version = "0.6.1", features = ["collector"] }
-serde = { version = "1.0.215", features = ["derive"] }
-tokio = { version = "1.41.1", features = ["full"] }
+poise = { git = "https://github.com/serenity-rs/poise", version = "0.6.1", features = [
+    "collector",
+] }
+serde = { version = "1.0.216", features = ["derive"] }
+tokio = { version = "1.42.0", features = ["full"] }
 rand = "0.8"
 dotenvy = "0.15.7"
 tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
-thiserror = "2.0.3"
-chrono = "0.4.38"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+thiserror = "2.0.7"
+chrono = "0.4.39"
 futures = "0.3"
 reqwest = { version = "0.12.9", features = ["json"] }
-fastrand = "2.0"
+fastrand = "2.3.0"
 lru = "0.12.5"

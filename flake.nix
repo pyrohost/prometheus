@@ -11,11 +11,20 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
+        inherit (pkgs) lib;
 
         craneLib = crane.mkLib pkgs;
 
+        src = lib.fileset.toSource {
+          root = ./.;
+          fileset = lib.fileset.unions [
+            (craneLib.fileset.commonCargoSources ./.)
+            (lib.fileset.maybeMissing ./extra)
+          ];
+        };
+
         commonArgs = {
-          src = craneLib.cleanCargoSource ./.;
+          inherit src;
           strictDeps = true;
 
           nativeBuildInputs = [

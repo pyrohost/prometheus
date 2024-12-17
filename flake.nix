@@ -53,6 +53,11 @@
               type = lib.types.str;
               description = "Discord bot token";
             };
+            workingDir = lib.mkOption {
+              type = lib.types.str;
+              default = "/var/lib/pyrobot";
+              description = "Working directory for storage";
+            };
             user = lib.mkOption {
               type = lib.types.str;
               default = "pyrobot";
@@ -70,6 +75,8 @@
               isSystemUser = true;
               group = config.services.pyrobot.group;
               description = "Pyro Discord bot service user";
+              home = config.services.pyrobot.workingDir;
+              createHome = true;
             };
 
             users.groups.${config.services.pyrobot.group} = {};
@@ -92,7 +99,11 @@
                 PrivateDevices = true;
                 ProtectSystem = "strict";
                 ProtectHome = true;
+                WorkingDirectory = config.services.pyrobot.workingDir;
                 ReadOnlyDirectories = "/";
+                ReadWritePaths = [ 
+                  config.services.pyrobot.workingDir 
+                ];
                 PrivateUsers = true;
                 Environment = "DISCORD_TOKEN=${config.services.pyrobot.token}";
               };

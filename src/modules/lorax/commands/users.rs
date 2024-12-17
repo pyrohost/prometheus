@@ -1,5 +1,3 @@
-use std::collections::hash_map::Entry;
-
 use crate::{
     modules::lorax::database::{LoraxEvent, LoraxStage},
     Context, Error,
@@ -243,7 +241,7 @@ pub async fn vote(ctx: Context<'_>) -> Result<(), Error> {
                         .collect(),
                 },
             )
-            .placeholder("Choose a tree to vote for (you can't vote for your own)"),
+            .placeholder("Choose wisely..."),
         )];
 
         if total_pages > 1 {
@@ -261,7 +259,7 @@ pub async fn vote(ctx: Context<'_>) -> Result<(), Error> {
 
         CreateReply::default()
             .content(format!(
-                "🗳️ **Vote for your favorite tree name!** (Page {}/{})",
+                "🗳️ **Vote for your favorite tree name!** (Page {}/{})\nNote: You can't vote for your own.",
                 page + 1,
                 total_pages
             ))
@@ -280,7 +278,7 @@ pub async fn vote(ctx: Context<'_>) -> Result<(), Error> {
                         .collect(),
                 },
             )
-            .placeholder("Choose a tree to vote for (you can't vote for your own)"),
+            .placeholder("Choose wisely..."),
         )];
 
         if total_pages > 1 {
@@ -298,7 +296,7 @@ pub async fn vote(ctx: Context<'_>) -> Result<(), Error> {
 
         CreateInteractionResponseMessage::new()
             .content(format!(
-                "🗳️ Pick your favorite tree name: (Page {}/{})",
+                "🗳️ Pick your favorite tree name: (Page {}/{})\nNote: You can't vote for your own.",
                 page + 1,
                 total_pages
             ))

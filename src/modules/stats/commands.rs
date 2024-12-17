@@ -58,14 +58,15 @@ pub async fn set(
         return Ok(());
     }
 
-    let test_value = StatsTask::query_prometheus(&prometheus_url, &query).await?;
+    let _test_value = StatsTask::query_prometheus(&prometheus_url, &query).await?;
 
     let stat_bar = StatBar {
         channel_id: channel.get(),
         query,
         format,
         data_type,
-        last_value: Some(test_value),
+        last_value: None,
+        last_update: None,
     };
 
     ctx.data()
@@ -121,6 +122,7 @@ pub async fn create_channel(
         format,
         data_type,
         last_value: Some(test_value),
+        last_update: Some(std::time::SystemTime::now()),
     };
 
     ctx.data()

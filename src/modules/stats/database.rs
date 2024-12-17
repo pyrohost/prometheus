@@ -106,6 +106,7 @@ pub struct StatBar {
     pub format: String,
     pub data_type: DataType,
     pub last_value: Option<f64>,
+    pub last_update: Option<std::time::SystemTime>,
 }
 
 #[derive(Default, Serialize, Deserialize, Clone, Debug)]

@@ -280,7 +280,7 @@ pub async fn delete(
 }
 
 /// List all active test servers
-#[command(slash_command, guild_only, required_permissions = "MANAGE_CHANNELS")]
+#[command(slash_command, guild_only, ephemeral, required_permissions = "MANAGE_CHANNELS")]
 pub async fn list(ctx: Context<'_>) -> Result<(), Error> {
     let servers = ctx
         .data()

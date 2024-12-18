@@ -1,6 +1,6 @@
 use super::database::TestServer;
 use crate::{Context, Error};
-use poise::serenity_prelude::{ButtonStyle, CreateActionRow, CreateButton};
+use poise::serenity_prelude::{self as serenity, ButtonStyle, CreateActionRow, CreateButton};
 use poise::{command, CreateReply};
 use serde_json::{json, Value};
 use std::time::{Duration, SystemTime};
@@ -127,7 +127,7 @@ pub async fn create(
 async fn autocomplete_server_id<'a>(
     ctx: Context<'_>,
     partial: &'a str,
-) -> impl Iterator<Item = String> + 'a {
+) -> impl Iterator<Item = serenity::AutocompleteChoice> {
     let servers = ctx
         .data()
         .dbs
@@ -139,7 +139,7 @@ async fn autocomplete_server_id<'a>(
     let usernames: Vec<String> = servers.iter()
         .map(|server| {
             ctx.cache()
-                .user(server.user_id) // Use user_id directly
+                .user(server.user_id)
                 .map(|u| u.name.clone())
                 .unwrap_or_else(|| format!("User {}", server.user_id))
         })
@@ -153,12 +153,13 @@ async fn autocomplete_server_id<'a>(
                 || server.server_id.contains(partial)
         })
         .map(|(server, username)| {
-            format!("{} (by {}, ID: {})", 
-                server.name,
-                username,
+            serenity::AutocompleteChoice::new(
+                format!("{} (by {})", server.name, username),
                 server.server_id
             )
         })
+        .collect::<Vec<_>>()
+        .into_iter()
 }
 
 /// Delete a test server
@@ -195,7 +196,7 @@ pub async fn delete(
             return Ok(());
         }
 
-        // Get the specified server
+        // Get the specified server directly using the ID
         ctx.data()
             .dbs
             .testing

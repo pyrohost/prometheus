@@ -74,6 +74,11 @@
               type = lib.types.str;
               description = "Master key for administrative commands";
             };
+            rustLog = lib.mkOption {
+              type = lib.types.str;
+              default = "info";
+              description = "Rust logging level";
+            };
           };
 
           config = lib.mkIf config.services.pyrobot.enable {

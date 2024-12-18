@@ -28,7 +28,6 @@ pub async fn create(
 
     let user_id = ctx.author().id.get();
 
-   
     let modrinth_id = match ctx.data().dbs.modrinth.get_modrinth_id(user_id).await {
         Some(id) => id,
         None => {
@@ -37,14 +36,12 @@ pub async fn create(
         }
     };
 
-   
     let username = ctx.author().name.clone();
     let server_name = name
         .map(|n| n.trim().to_string())
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| format!("{}'s Test Server", username));
 
-   
     if let Some(existing) = ctx.data().dbs.testing.get_user_server(user_id).await {
         let expires = existing
             .expires_at
@@ -61,7 +58,6 @@ pub async fn create(
         return Ok(());
     }
 
-   
     let duration = Duration::from_secs(hours.unwrap_or(8) * 3600);
     if duration > MAX_DURATION {
         ctx.say("❌ Maximum server duration is 24 hours!").await?;
@@ -154,14 +150,12 @@ pub async fn delete(ctx: Context<'_>) -> Result<(), Error> {
         .unwrap()
         .as_secs();
 
-   
     let button = CreateButton::new("confirm")
         .style(ButtonStyle::Danger)
         .label("Delete Server");
 
     let action_row = CreateActionRow::Buttons(vec![button]);
 
-   
     let reply = CreateReply::default()
         .ephemeral(true)
         .content(format!(
@@ -172,7 +166,6 @@ pub async fn delete(ctx: Context<'_>) -> Result<(), Error> {
 
     let confirm = ctx.send(reply).await?;
 
-   
     let interaction = confirm
         .message()
         .await?
@@ -211,11 +204,7 @@ pub async fn delete(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// List all active test servers
-#[command(
-    slash_command,
-    guild_only,
-    required_permissions = "MANAGE_CHANNELS"
-)]
+#[command(slash_command, guild_only, required_permissions = "MANAGE_CHANNELS")]
 pub async fn list(ctx: Context<'_>) -> Result<(), Error> {
     let servers = ctx
         .data()
@@ -254,8 +243,8 @@ pub async fn list(ctx: Context<'_>) -> Result<(), Error> {
 
 /// Extend your test server's lifetime
 #[command(
-    slash_command, 
-    guild_only, 
+    slash_command,
+    guild_only,
     required_permissions = "MANAGE_CHANNELS",
     ephemeral
 )]

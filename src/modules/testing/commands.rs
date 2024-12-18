@@ -12,7 +12,7 @@ const MAX_DURATION: Duration = Duration::from_secs(24 * 60 * 60);
     slash_command,
     guild_only,
     required_permissions = "MANAGE_CHANNELS",
-    rename = "new"
+    ephemeral
 )]
 pub async fn create(
     ctx: Context<'_>,
@@ -24,6 +24,8 @@ pub async fn create(
     #[max = 24]
     hours: Option<u64>,
 ) -> Result<(), Error> {
+    ctx.defer_ephemeral().await?;
+
     let user_id = ctx.author().id.get();
 
    
@@ -68,14 +70,16 @@ pub async fn create(
 
     ctx.defer().await?;
 
+    let base_ram = 2048;
     let payload = json!({
         "user_id": modrinth_id,
         "name": server_name,
+        "testing": true,
         "specs": {
             "cpu": 2,
-            "memory_mb": 4096,
-            "swap_mb": 4097,
-            "storage_mb": 32768
+            "memory_mb": base_ram,
+            "swap_mb": base_ram / 4,
+            "storage_mb": base_ram * 8,
         },
         "source": {
             "loader": "Vanilla",
@@ -128,9 +132,11 @@ pub async fn create(
     slash_command,
     guild_only,
     required_permissions = "MANAGE_CHANNELS",
-    rename = "remove"
+    ephemeral
 )]
 pub async fn delete(ctx: Context<'_>) -> Result<(), Error> {
+    ctx.defer_ephemeral().await?;
+
     let user_id = ctx.author().id.get();
 
     let server = match ctx.data().dbs.testing.get_user_server(user_id).await {
@@ -157,6 +163,7 @@ pub async fn delete(ctx: Context<'_>) -> Result<(), Error> {
 
    
     let reply = CreateReply::default()
+        .ephemeral(true)
         .content(format!(
             "🗑️ Are you sure you want to delete your test server?\n> **{}**\n> Created <t:{}:R>",
             server.name, created_at
@@ -207,8 +214,7 @@ pub async fn delete(ctx: Context<'_>) -> Result<(), Error> {
 #[command(
     slash_command,
     guild_only,
-    required_permissions = "MANAGE_CHANNELS",
-    rename = "active"
+    required_permissions = "MANAGE_CHANNELS"
 )]
 pub async fn list(ctx: Context<'_>) -> Result<(), Error> {
     let servers = ctx
@@ -223,7 +229,7 @@ pub async fn list(ctx: Context<'_>) -> Result<(), Error> {
         return Ok(());
     }
 
-    let mut response = String::from("🧪 **Active Test Servers**\n");
+    let mut response = String::from("📊 **Active Test Servers**\n");
     for (i, server) in servers.iter().enumerate() {
         let expires = server
             .expires_at
@@ -247,7 +253,12 @@ pub async fn list(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// Extend your test server's lifetime
-#[command(slash_command, guild_only, required_permissions = "MANAGE_CHANNELS")]
+#[command(
+    slash_command, 
+    guild_only, 
+    required_permissions = "MANAGE_CHANNELS",
+    ephemeral
+)]
 pub async fn extend(
     ctx: Context<'_>,
     #[description = "Additional hours to add (max: 24)"]
@@ -255,6 +266,8 @@ pub async fn extend(
     #[max = 24]
     hours: u64,
 ) -> Result<(), Error> {
+    ctx.defer_ephemeral().await?;
+
     let user_id = ctx.author().id.get();
 
     let server = match ctx.data().dbs.testing.get_user_server(user_id).await {

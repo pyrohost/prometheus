@@ -5,12 +5,12 @@ use serde_json::Value;
 const VERIFICATION_CODE: &str = "PYRO-";
 
 /// Start linking your Modrinth account
-#[command(slash_command, guild_only, rename = "connect")]
+#[command(slash_command, guild_only, ephemeral)]
 pub async fn link(ctx: Context<'_>) -> Result<(), Error> {
     let discord_id = ctx.author().id.get();
 
     if let Some(_) = ctx.data().dbs.modrinth.get_modrinth_id(discord_id).await {
-        ctx.say("❌ Your account is already linked! Use `/modrinth unlink` first.")
+        ctx.say("⚠️ Your account is already linked! Use `/modrinth unlink` first.")
             .await?;
         return Ok(());
     }
@@ -18,11 +18,11 @@ pub async fn link(ctx: Context<'_>) -> Result<(), Error> {
     let verification_code = format!("{}{}", VERIFICATION_CODE, discord_id);
 
     ctx.say(format!(
-        "**Link your Modrinth Account**\n\n\
-        1. Go to your [Modrinth profile settings](https://modrinth.com/settings/account)\n\
+        "🔗 **Link your Modrinth Account**\n\n\
+        1. Visit your [Modrinth profile settings](https://modrinth.com/settings/account)\n\
         2. Add this code to your bio: `{}`\n\
-        3. Run `/account verify` to complete linking\n\n\
-        You can remove the code from your bio after verification.",
+        3. Use `/modrinth verify` to complete linking\n\n\
+        Note: You can remove the code from your bio after verification.",
         verification_code
     ))
     .await?;
@@ -31,9 +31,8 @@ pub async fn link(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// Complete Modrinth account verification
-#[command(slash_command, guild_only)]
+#[command(slash_command, guild_only, ephemeral)]
 pub async fn verify(ctx: Context<'_>) -> Result<(), Error> {
-    ctx.defer().await?;
     let discord_id = ctx.author().id.get();
     let verification_code = format!("{}{}", VERIFICATION_CODE, discord_id);
 
@@ -64,7 +63,7 @@ pub async fn verify(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// Unlink your Modrinth account
-#[command(slash_command, guild_only, rename = "disconnect")]
+#[command(slash_command, guild_only, ephemeral)]
 pub async fn unlink(ctx: Context<'_>) -> Result<(), Error> {
     let discord_id = ctx.author().id.get();
 

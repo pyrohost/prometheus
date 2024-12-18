@@ -7,12 +7,10 @@ use poise::command;
 /// 🔗 Link your Modrinth account
 #[command(
     slash_command,
-    subcommands("link", "unlink", "verify"),
+    subcommands("link", "unlink"),
     guild_only,
     category = "Account"
 )]
-pub async fn account(_ctx: crate::Context<'_>) -> Result<(), crate::Error> {
+pub async fn modrinth(_ctx: crate::Context<'_>) -> Result<(), crate::Error> {
     Ok(())
 }
-
-pub use account as modrinth;

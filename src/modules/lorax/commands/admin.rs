@@ -225,7 +225,11 @@ pub async fn submissions(ctx: Context<'_>) -> Result<(), Error> {
 
     let has_manage_messages = ctx.author_member().await.map_or(false, |m| {
         ctx.guild()
-            .map_or(false, |g| g.member_permissions(&m).manage_messages())
+            .map_or(false, |g| {
+                // Use default channel if no rules channel exists
+                let channel = g.channels.values().next().unwrap();
+                g.user_permissions_in(channel, &m).manage_messages()
+            })
     });
 
     if matches!(event.stage, LoraxStage::Submission) && !has_manage_messages {
@@ -270,7 +274,11 @@ pub async fn votes(ctx: Context<'_>) -> Result<(), Error> {
 
     let has_manage_messages = ctx.author_member().await.map_or(false, |m| {
         ctx.guild()
-            .map_or(false, |g| g.member_permissions(&m).manage_messages())
+            .map_or(false, |g| {
+                // Use default channel if no rules channel exists
+                let channel = g.channels.values().next().unwrap();
+                g.user_permissions_in(channel, &m).manage_messages()
+            })
     });
 
     if !matches!(event.stage, LoraxStage::Completed) && !has_manage_messages {

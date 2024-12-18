@@ -123,23 +123,93 @@ pub async fn create(
     Ok(())
 }
 
-/// Delete your test server
+/// Helper function for server ID autocomplete
+async fn autocomplete_server_id<'a>(
+    ctx: Context<'_>,
+    partial: &'a str,
+) -> impl Iterator<Item = String> + 'a {
+    let servers = ctx
+        .data()
+        .dbs
+        .testing
+        .read(|db| db.servers.values().cloned().collect::<Vec<_>>())
+        .await;
+
+    // Get usernames from cache where possible
+    let usernames: Vec<String> = servers.iter()
+        .map(|server| {
+            ctx.cache()
+                .user(server.user_id) // Use user_id directly
+                .map(|u| u.name.clone())
+                .unwrap_or_else(|| format!("User {}", server.user_id))
+        })
+        .collect();
+
+    servers
+        .into_iter()
+        .zip(usernames)
+        .filter(move |(server, _)| {
+            server.name.to_lowercase().contains(&partial.to_lowercase())
+                || server.server_id.contains(partial)
+        })
+        .map(|(server, username)| {
+            format!("{} (by {}, ID: {})", 
+                server.name,
+                username,
+                server.server_id
+            )
+        })
+}
+
+/// Delete a test server
 #[command(
     slash_command,
     guild_only,
     required_permissions = "MANAGE_CHANNELS",
     ephemeral
 )]
-pub async fn delete(ctx: Context<'_>) -> Result<(), Error> {
+pub async fn delete(
+    ctx: Context<'_>,
+    #[description = "Specific server ID to delete (administrators only)"]
+    #[autocomplete = "autocomplete_server_id"]
+    server_id: Option<String>,
+) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
 
     let user_id = ctx.author().id.get();
 
-    let server = match ctx.data().dbs.testing.get_user_server(user_id).await {
+    // If server_id is provided, check for admin permissions
+    let server = if let Some(server_id) = server_id {
+        // Check if user has administrator permission
+        if !ctx
+            .author_member()
+            .await
+            .and_then(|m| {
+                ctx.guild()
+                    .map(|g| g.user_permissions_in(&g.channels[&g.rules_channel_id.unwrap_or_default()], &m))
+            })
+            .map_or(false, |p| p.administrator())
+        {
+            ctx.say("❌ Administrator permission required to delete other servers!")
+                .await?;
+            return Ok(());
+        }
+
+        // Get the specified server
+        ctx.data()
+            .dbs
+            .testing
+            .read(|db| db.servers.get(&server_id).cloned())
+            .await
+    } else {
+        // Get the user's own server
+        ctx.data().dbs.testing.get_user_server(user_id).await
+    };
+
+    let server = match server {
         Some(s) => s,
         None => {
-            ctx.say("❌ You don't have any active test servers!")
-                .await?;
+            ctx.say("❌ Server not found!").await?;
             return Ok(());
         }
     };
@@ -156,11 +226,17 @@ pub async fn delete(ctx: Context<'_>) -> Result<(), Error> {
 
     let action_row = CreateActionRow::Buttons(vec![button]);
 
+    let owner_note = if server.user_id != user_id {
+        format!("\n> Owner: <@{}>", server.user_id)
+    } else {
+        String::new()
+    };
+
     let reply = CreateReply::default()
         .ephemeral(true)
         .content(format!(
-            "🗑️ Are you sure you want to delete your test server?\n> **{}**\n> Created <t:{}:R>",
-            server.name, created_at
+            "🗑️ Are you sure you want to delete this test server?\n> **{}**\n> Created <t:{}:R>{}",
+            server.name, created_at, owner_note
         ))
         .components(vec![action_row]);
 

@@ -9,7 +9,7 @@ use poise::command;
 #[command(
     slash_command,
     subcommands("create", "delete", "list", "extend"),
-    guild_only,
+    guild_only
 )]
 pub async fn servers(_ctx: crate::Context<'_>) -> Result<(), crate::Error> {
     Ok(())

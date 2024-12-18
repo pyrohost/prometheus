@@ -135,8 +135,8 @@ async fn autocomplete_server_id<'a>(
         .read(|db| db.servers.values().cloned().collect::<Vec<_>>())
         .await;
 
-    // Get usernames from cache where possible
-    let usernames: Vec<String> = servers.iter()
+    let usernames: Vec<String> = servers
+        .iter()
         .map(|server| {
             ctx.cache()
                 .user(server.user_id)
@@ -155,7 +155,7 @@ async fn autocomplete_server_id<'a>(
         .map(|(server, username)| {
             serenity::AutocompleteChoice::new(
                 format!("{} (by {})", server.name, username),
-                server.server_id
+                server.server_id,
             )
         })
         .collect::<Vec<_>>()
@@ -179,15 +179,14 @@ pub async fn delete(
 
     let user_id = ctx.author().id.get();
 
-    // If server_id is provided, check for admin permissions
     let server = if let Some(server_id) = server_id {
-        // Check if user has administrator permission
         if !ctx
             .author_member()
             .await
             .and_then(|m| {
-                ctx.guild()
-                    .map(|g| g.user_permissions_in(&g.channels[&g.rules_channel_id.unwrap_or_default()], &m))
+                ctx.guild().map(|g| {
+                    g.user_permissions_in(&g.channels[&g.rules_channel_id.unwrap_or_default()], &m)
+                })
             })
             .map_or(false, |p| p.administrator())
         {
@@ -196,14 +195,12 @@ pub async fn delete(
             return Ok(());
         }
 
-        // Get the specified server directly using the ID
         ctx.data()
             .dbs
             .testing
             .read(|db| db.servers.get(&server_id).cloned())
             .await
     } else {
-        // Get the user's own server
         ctx.data().dbs.testing.get_user_server(user_id).await
     };
 
@@ -243,20 +240,22 @@ pub async fn delete(
 
     let confirm = ctx.send(reply).await?;
 
+    let user_id = ctx.author().id;
     let interaction = confirm
         .message()
         .await?
         .await_component_interaction(ctx.serenity_context())
+        .author_id(user_id)
         .timeout(Duration::from_secs(30))
         .await;
 
-    if interaction.is_none() {
+    let Some(interaction) = interaction else {
         let edit_reply = CreateReply::default().content("❌ Operation timed out");
         confirm.edit(ctx, edit_reply).await?;
         return Ok(());
-    }
+    };
 
-    ctx.defer_ephemeral().await?;
+    interaction.defer_ephemeral(ctx).await?;
 
     let client = reqwest::Client::new();
     client

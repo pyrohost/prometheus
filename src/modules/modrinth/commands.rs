@@ -6,7 +6,7 @@ use tokio::time::sleep;
 
 const VERIFICATION_CODE: &str = "PYRO-";
 const CHECK_INTERVAL: Duration = Duration::from_secs(10);
-const MAX_DURATION: Duration = Duration::from_secs(300); // 5 minutes
+const MAX_DURATION: Duration = Duration::from_secs(300);
 
 /// Link your Modrinth account
 #[command(slash_command, guild_only, ephemeral)]

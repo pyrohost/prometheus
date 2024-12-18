@@ -97,7 +97,7 @@ pub async fn create(
         .await?;
 
     let response: Value = response.json().await?;
-    let server_id = response["id"]
+    let server_id = response["uuid"]
         .as_str()
         .ok_or("Invalid server ID in response")?;
 

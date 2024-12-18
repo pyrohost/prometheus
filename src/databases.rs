@@ -1,10 +1,15 @@
 use crate::database::Database;
-use crate::modules::{lorax::database::LoraxDatabase, stats::database::StatsDatabase};
+use crate::modules::{
+    lorax::database::LoraxDatabase, modrinth::database::ModrinthDatabase,
+    stats::database::StatsDatabase, testing::database::TestingDatabase,
+};
 
 #[derive(Debug)]
 pub struct Databases {
     pub lorax: Database<LoraxDatabase>,
     pub stats: Database<StatsDatabase>,
+    pub testing: Database<TestingDatabase>,
+    pub modrinth: Database<ModrinthDatabase>,
 }
 
 impl Default for Databases {
@@ -18,6 +23,8 @@ impl Databases {
         Ok(Self {
             lorax: Database::new("data/lorax.db").await?,
             stats: Database::new("data/stats.db").await?,
+            testing: Database::new("data/testing.db").await?,
+            modrinth: Database::new("modrinth.json").await?,
         })
     }
 }

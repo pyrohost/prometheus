@@ -2,8 +2,10 @@ use crate::modules::lorax::database::LoraxHandler;
 use databases::Databases;
 use modules::{
     lorax::{commands::lorax, task::LoraxEventTask},
+    modrinth::modrinth,
     stats::{stats, task::StatsTask},
     system::events::ReadyHandler,
+    testing::{task::TestingTask, testing},
 };
 use poise::serenity_prelude::{self as serenity, CreateAllowedMentions};
 use std::sync::Arc;
@@ -24,6 +26,12 @@ pub struct Data {
     pub dbs: Arc<Databases>,
     pub task_manager: Arc<TaskManager>,
     pub event_manager: Arc<EventManager>,
+    pub config: Config,
+}
+
+#[derive(Clone, Debug)]
+pub struct Config {
+    pub master_key: String,
 }
 
 impl Data {
@@ -40,6 +48,10 @@ impl Data {
 
         let stats_task = StatsTask::new(self.dbs.stats.clone());
         self.task_manager.add_task(stats_task).await;
+
+        let testing_task =
+            TestingTask::new(self.dbs.testing.clone(), self.config.master_key.clone());
+        self.task_manager.add_task(testing_task).await;
 
         self.task_manager.start_tasks(ctx.clone()).await;
     }
@@ -72,7 +84,7 @@ async fn main() {
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions::<Data, Error> {
             allowed_mentions: Some(CreateAllowedMentions::new().empty_roles().empty_users()),
-            commands: vec![register(), lorax(), stats()],
+            commands: vec![register(), lorax(), stats(), testing(), modrinth()],
             pre_command: |ctx| {
                 Box::pin(async move {
                     trace!(
@@ -128,6 +140,7 @@ async fn main() {
                 let dbs = Arc::new(Databases::default().await?);
                 let task_manager = Arc::new(tasks::TaskManager::new());
                 let event_manager = Arc::new(events::EventManager::new());
+                let master_key = std::env::var("MASTER_KEY").expect("missing MASTER_KEY");
 
                 event_manager.add_handler(ReadyHandler).await;
 
@@ -135,6 +148,7 @@ async fn main() {
                     dbs,
                     task_manager,
                     event_manager,
+                    config: Config { master_key },
                 };
                 data.init_tasks(ctx).await;
 

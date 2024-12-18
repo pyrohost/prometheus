@@ -7,6 +7,7 @@ use poise::serenity_prelude::{
     AutoArchiveDuration, ChannelId, ChannelType, Context, CreateAllowedMentions, CreateMessage,
     CreateThread, EditThread, RoleId,
 };
+use rand::seq::SliceRandom;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -50,7 +51,10 @@ impl LoraxEventTask {
 
     pub async fn start_event(&mut self, settings: LoraxSettings, ctx: &Context) {
         let event = LoraxEvent::new(settings, get_current_timestamp());
-        let _ = self.db.update_event(self.guild_id, event).await;
+        if let Err(e) = self.db.update_event(self.guild_id, event).await {
+            tracing::error!("Failed to update event: {}", e);
+            return;
+        }
 
         if let Some(mut event) = self.db.get_event(self.guild_id).await {
             event.stage = LoraxStage::Submission;
@@ -90,19 +94,28 @@ impl LoraxEventTask {
 
         if let (Some(winner_role), Some(alumni_role)) = (winner_role, alumni_role) {
             if let Ok(guild) = ctx.http.get_guild(guild_id).await {
-                if let Ok(members) = guild.members(ctx, Some(1000), None).await {
-                    for member in members {
-                        if member.roles.contains(&winner_role) {
-                            let _ = member.remove_role(ctx, winner_role).await;
-                            let _ = member.add_role(ctx, alumni_role).await;
+                if let Some((winning_tree, _)) = winners.first() {
+                    if let Some(winner_id) = event.get_tree_submitter(winning_tree) {
+                        if let Ok(member) = guild.member(ctx, winner_id).await {
+                            if let Err(e) = member.add_role(ctx, winner_role).await {
+                                tracing::error!("Failed to add winner role: {}", e);
+                                return;
+                            }
                         }
                     }
                 }
 
-                if let Some((winning_tree, _)) = winners.first() {
-                    if let Some(winner_id) = event.get_tree_submitter(winning_tree) {
-                        if let Ok(member) = guild.member(ctx, winner_id).await {
-                            let _ = member.add_role(ctx, winner_role).await;
+                let mut after = None;
+                while let Ok(members) = guild.members(ctx, Some(1000), after).await {
+                    if members.is_empty() {
+                        break;
+                    }
+                    after = members.last().map(|m| m.user.id);
+
+                    for member in members {
+                        if member.roles.contains(&winner_role) {
+                            let _ = member.remove_role(ctx, winner_role).await;
+                            let _ = member.add_role(ctx, alumni_role).await;
                         }
                     }
                 }
@@ -127,7 +140,7 @@ impl LoraxEventTask {
                 self.handle_winner_roles(ctx, event).await;
             }
             LoraxStage::Tiebreaker(round) => {
-                if (round) >= 3 {
+                if round >= 3 {
                     event.stage = LoraxStage::Completed;
                 } else {
                     event.stage = LoraxStage::Tiebreaker(round + 1);
@@ -138,6 +151,9 @@ impl LoraxEventTask {
                 event.stage = LoraxStage::Inactive;
             }
             LoraxStage::Inactive => return,
+        }
+        if let Err(e) = self.db.update_event(self.guild_id, event.clone()).await {
+            tracing::error!("Failed to update event stage: {}", e);
         }
         self.send_stage_message(ctx, event).await;
     }
@@ -186,42 +202,55 @@ impl LoraxEventTask {
                 .map(|id| format!("<@&{}> ", id))
                 .unwrap_or_default();
 
+            let sample_trees = vec!["Willow", "Sequoia", "Maple", "Oak", "Pine"];
+            let random_tree = sample_trees
+                .choose(&mut rand::thread_rng())
+                .unwrap_or(&"Tree");
+
             let content = match event.stage {
                 LoraxStage::Submission => format!(
-                    "{role_ping}🌿 New Lorax event! Submit your tree name with `/lorax submit`.\nSubmissions close <t:{}:R>",
+                    "{role_ping}🌳 Help us name our new node! Submit a tree name like '{random_tree}' with `/lorax submit`.\nSubmissions close <t:{}:R>",
                     event.get_stage_end_timestamp(self.calculate_stage_duration(event))
                 ),
-                LoraxStage::Voting => if event.tree_submissions.is_empty() {
-                    event.stage = LoraxStage::Inactive;
-                    format!("{role_ping}🗳️ Not enough submissions to start a vote!")
-                } else {
-                    format!(
-                    "{role_ping}🗳️ Time to vote! {} entries submitted. Use `/lorax vote` to choose your favorite.\nVoting ends <t:{}:R>",
-                    event.current_trees.len(),
-                    event.get_stage_end_timestamp(self.calculate_stage_duration(event)))
-                }
+                LoraxStage::Voting => {
+                    if event.tree_submissions.is_empty() {
+                        event.stage = LoraxStage::Inactive;
+                        format!("{role_ping}😕 No tree names were submitted.")
+                    } else {
+                        format!(
+                            "{role_ping}🗳️ Time to vote! Use `/lorax vote` to choose the new node's name.\nVoting ends <t:{}:R>",
+                            event.get_stage_end_timestamp(self.calculate_stage_duration(event))
+                        )
+                    }
+                },
                 LoraxStage::Tiebreaker(round) => format!(
-                    "{role_ping}🎯 Tiebreaker Round {}! {} entries tied. Vote again with `/lorax vote`.\nEnds <t:{}:R>",
-                    round,
-                    event.current_trees.len(),
+                    "{role_ping}⚖️ Tiebreaker Round {round}! Vote again with `/lorax vote`.\nEnds <t:{}:R>",
                     event.get_stage_end_timestamp(self.calculate_stage_duration(event))
                 ),
                 LoraxStage::Completed => {
                     let mut podium = String::new();
+                    let total_entries = event.current_trees.len();
                     for (i, tree) in event.current_trees.iter().take(3).enumerate() {
-                        if let Some(winner_id) = event.get_tree_submitter(tree) {
-                            let medal = match i {
-                                0 => "🥇",
-                                1 => "🥈",
-                                2 => "🥉",
-                                _ => unreachable!(),
-                            };
-                            podium.push_str(&format!("{} **{}**\n└ Submitted by <@{}>\n\n", medal, tree, winner_id));
+                        match i {
+                            0 => podium.push_str(&format!("🥇 **{}**", tree)),
+                            1 => podium.push_str(&format!("\n🥈 **{}**", tree)),
+                            2 => podium.push_str(&format!("\n🥉 **{}**", tree)),
+                            _ => unreachable!(),
+                        }
+                        if let Some(submitter_id) = event.get_tree_submitter(tree) {
+                            podium.push_str(&format!(" (by <@{}>)", submitter_id));
                         }
                     }
+                    if total_entries > 3 {
+                        podium.push_str(&format!("\n\nand {} runner ups...", total_entries - 3));
+                    }
+
+                    let winner_name = event.current_trees.first()
+                        .map(|s| s.as_str())
+                        .unwrap_or("Unknown");
+
                     format!(
-                        "{role_ping}🎊 **This Lorax Event Has Concluded!**\n\n{}\n🌲 **Event Stats**\n└ Total Entries: {}\n└ Total Votes: {}",
-                        podium,
+                        "{role_ping}🎉 **Node Naming Results**\nOur new node will be named **{winner_name}**!\n\n{podium}\n\n🌲 **Event Stats**\n- Names Submitted: {}\n- Votes Cast: {}",
                         event.tree_submissions.len(),
                         event.tree_votes.len()
                     )

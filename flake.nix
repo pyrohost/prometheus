@@ -40,6 +40,8 @@
           ];
 
           DISCORD_TOKEN = "";
+          MASTER_KEY = "";
+          RUST_LOG = "info";
         };
 
         pyrobot = craneLib.buildPackage (commonArgs // {
@@ -67,6 +69,10 @@
               type = lib.types.str;
               default = "pyrobot";
               description = "Group under which the bot runs";
+            };
+            masterKey = lib.mkOption {
+              type = lib.types.str;
+              description = "Master key for administrative commands";
             };
           };
 
@@ -105,7 +111,11 @@
                   config.services.pyrobot.workingDir 
                 ];
                 PrivateUsers = true;
-                Environment = "DISCORD_TOKEN=${config.services.pyrobot.token}";
+                Environment = [
+                  "DISCORD_TOKEN=${config.services.pyrobot.token}"
+                  "MASTER_KEY=${config.services.pyrobot.masterKey}"
+                  "RUST_LOG=${config.services.pyrobot.rustLog}"
+                ];
               };
             };
           };

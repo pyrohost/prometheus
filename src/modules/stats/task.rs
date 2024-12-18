@@ -2,7 +2,10 @@ use crate::tasks::Task;
 use crate::{database::Database, modules::stats::database::StatsDatabase};
 use async_trait::async_trait;
 use poise::serenity_prelude::{ChannelId, Context, EditChannel};
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::RwLock;
 use tokio::time::{sleep, timeout};
 use tracing::{debug, error, info, warn};
 
@@ -11,11 +14,64 @@ use super::database::StatBar;
 #[derive(Debug)]
 pub struct StatsTask {
     db: Database<StatsDatabase>,
+    query_cache: Arc<RwLock<HashMap<String, (f64, std::time::Instant)>>>,
+    channel_updates: Arc<RwLock<HashMap<u64, std::time::Instant>>>,
 }
 
 impl StatsTask {
     pub fn new(db: Database<StatsDatabase>) -> Self {
-        Self { db }
+        Self {
+            db,
+            query_cache: Arc::new(RwLock::new(HashMap::new())),
+            channel_updates: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    async fn get_cached_query(
+        cache: &Arc<RwLock<HashMap<String, (f64, std::time::Instant)>>>,
+        prometheus_url: &str,
+        query: &str,
+    ) -> Option<f64> {
+        let cache_key = format!("{}:{}", prometheus_url, query);
+        let cache = cache.read().await;
+        if let Some((value, timestamp)) = cache.get(&cache_key) {
+            if timestamp.elapsed() < Duration::from_secs(60) {
+                return Some(*value);
+            }
+        }
+        None
+    }
+
+    async fn cache_query(
+        cache: &Arc<RwLock<HashMap<String, (f64, std::time::Instant)>>>,
+        prometheus_url: &str,
+        query: &str,
+        value: f64,
+    ) {
+        let cache_key = format!("{}:{}", prometheus_url, query);
+        let mut cache = cache.write().await;
+        cache.insert(cache_key, (value, std::time::Instant::now()));
+    }
+
+    async fn can_update_channel(
+        updates: &Arc<RwLock<HashMap<u64, std::time::Instant>>>,
+        channel_id: u64,
+    ) -> bool {
+        let updates = updates.read().await;
+        if let Some(last_update) = updates.get(&channel_id) {
+            if last_update.elapsed() < Duration::from_secs(10) {
+                return false;
+            }
+        }
+        true
+    }
+
+    async fn mark_channel_update(
+        updates: &Arc<RwLock<HashMap<u64, std::time::Instant>>>,
+        channel_id: u64,
+    ) {
+        let mut updates = updates.write().await;
+        updates.insert(channel_id, std::time::Instant::now());
     }
 
     pub async fn query_prometheus(
@@ -62,11 +118,25 @@ impl StatsTask {
     }
 
     async fn update_stat_bar(
+        &self,
         ctx: &Context,
         prometheus_url: &str,
         stat_bar: &mut StatBar,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let value = Self::query_prometheus(prometheus_url, &stat_bar.query).await?;
+        if !Self::can_update_channel(&self.channel_updates, stat_bar.channel_id).await {
+            return Ok(());
+        }
+
+        let value = if let Some(cached) =
+            Self::get_cached_query(&self.query_cache, prometheus_url, &stat_bar.query).await
+        {
+            cached
+        } else {
+            let value = Self::query_prometheus(prometheus_url, &stat_bar.query).await?;
+            Self::cache_query(&self.query_cache, prometheus_url, &stat_bar.query, value).await;
+            value
+        };
+
         let channel = ChannelId::new(stat_bar.channel_id);
         let formatted_value = stat_bar.data_type.format_value(value);
         let new_name = stat_bar.format.replace("{value}", &formatted_value);
@@ -125,17 +195,22 @@ impl StatsTask {
                     "Updated stat bar {} to \"{}\"",
                     stat_bar.channel_id, new_name
                 );
-                Ok(())
             }
             Ok(Err(e)) => {
                 error!("Failed to update channel {}: {}", stat_bar.channel_id, e);
-                Err(e.into())
+                return Err(e.into());
             }
             Err(_) => {
                 error!("Timeout updating channel {}", stat_bar.channel_id);
-                Err("Channel update timeout".into())
+                return Err("Channel update timeout".into());
             }
         }
+
+        Self::mark_channel_update(&self.channel_updates, stat_bar.channel_id).await;
+        stat_bar.error_count = 0;
+        stat_bar.last_error = None;
+        stat_bar.last_success = Some(std::time::SystemTime::now());
+        Ok(())
     }
 }
 
@@ -197,7 +272,7 @@ impl Task for StatsTask {
 
             match timeout(
                 Duration::from_secs(10),
-                Self::update_stat_bar(ctx, &prometheus_url, &mut stat_bar),
+                self.update_stat_bar(ctx, &prometheus_url, &mut stat_bar),
             )
             .await
             {
@@ -238,6 +313,8 @@ impl Clone for StatsTask {
     fn clone(&self) -> Self {
         Self {
             db: self.db.clone(),
+            query_cache: Arc::clone(&self.query_cache),
+            channel_updates: Arc::clone(&self.channel_updates),
         }
     }
 }

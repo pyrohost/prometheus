@@ -67,6 +67,9 @@ pub async fn set(
         data_type,
         last_value: None,
         last_update: None,
+        error_count: 0,
+        last_error: None,
+        last_success: None,
     };
 
     ctx.data()
@@ -123,6 +126,9 @@ pub async fn create_channel(
         data_type,
         last_value: Some(test_value),
         last_update: Some(std::time::SystemTime::now()),
+        error_count: 0,
+        last_error: None,
+        last_success: Some(std::time::SystemTime::now()),
     };
 
     ctx.data()
@@ -260,6 +266,48 @@ pub async fn set_delay(
     Ok(())
 }
 
+/// Test a Prometheus query before using it
+#[command(slash_command, guild_only, required_permissions = "MANAGE_CHANNELS")]
+pub async fn test_query(
+    ctx: Context<'_>,
+    #[description = "Prometheus query to test"] query: String,
+    #[description = "Value type"] data_type: DataType,
+) -> Result<(), Error> {
+    let guild_id = ctx.guild_id().unwrap().get();
+
+    let prometheus_url = ctx
+        .data()
+        .dbs
+        .stats
+        .get_settings(guild_id)
+        .await?
+        .prometheus_url;
+
+    if prometheus_url.is_empty() {
+        ctx.say("❌ Please set a Prometheus server URL first!")
+            .await?;
+        return Ok(());
+    }
+
+    ctx.defer().await?;
+
+    match StatsTask::query_prometheus(&prometheus_url, &query).await {
+        Ok(value) => {
+            let formatted = data_type.format_value(value);
+            ctx.say(format!(
+                "✅ Query successful!\nRaw value: `{}`\nFormatted value: `{}`",
+                value, formatted
+            ))
+            .await?;
+        }
+        Err(e) => {
+            ctx.say(format!("❌ Query failed: {}", e)).await?;
+        }
+    }
+
+    Ok(())
+}
+
 #[command(
     slash_command,
     subcommands(
@@ -269,7 +317,8 @@ pub async fn set_delay(
         "set",
         "create_channel",
         "remove",
-        "list"
+        "list",
+        "test_query"
     )
 )]
 pub async fn stats(_ctx: crate::Context<'_>) -> Result<(), crate::Error> {

@@ -4,29 +4,92 @@ use poise::serenity_prelude::{self as serenity, ButtonStyle, CreateActionRow, Cr
 use poise::{command, CreateReply};
 use serde_json::{json, Value};
 use std::time::{Duration, SystemTime};
+use reqwest::Client;
 
 const MAX_DURATION: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// Create a new test server
-#[command(
-    slash_command,
-    guild_only,
-    required_permissions = "MANAGE_CHANNELS",
-    ephemeral
-)]
+async fn format_expiry(time: SystemTime) -> String {
+    let expires = time
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    format!("<t:{}:R>", expires)
+}
+
+async fn send_api_request(
+    ctx: Context<'_>,
+    url: &str,
+    method: reqwest::Method,
+    payload: Option<Value>,
+) -> Result<Value, Error> {
+    let client = Client::new();
+    let mut request = client
+        .request(method, url)
+        .header("X-MASTER-KEY", &ctx.data().config.master_key);
+
+    if let Some(payload) = payload {
+        request = request.json(&payload);
+    }
+
+    let response = request.send().await?;
+    let response: Value = response.json().await?;
+    Ok(response)
+}
+
+async fn check_administrator(ctx: &Context<'_>) -> bool {
+    let Some(member) = ctx.author_member().await else { return false };
+    let Some(guild) = ctx.guild() else { return false };
+
+    member.permissions.map_or(false, |p| p.administrator())
+}
+
+/// Create a temporary test server for Minecraft development
+/// 
+/// Creates a server with specified resources that will automatically be deleted after expiry.
+/// Regular staff get 1GB RAM servers, while administrators can configure custom specs.
+#[command(slash_command, guild_only, required_permissions = "MANAGE_CHANNELS", ephemeral)]
 pub async fn create(
     ctx: Context<'_>,
-    #[description = "Custom server name (defaults to your username)"]
-    #[max_length = 32]
-    name: Option<String>,
-    #[description = "Server lifetime in hours (default: 8, max: 24)"]
-    #[min = 1]
-    #[max = 24]
-    hours: Option<u64>,
+    #[description = "Server name (defaults to your username)"] name: Option<String>,
+    #[description = "Lifetime in hours (admins: unlimited, others: max 24)"] hours: Option<u64>,
+    #[description = "Create for another user (admin only)"] user: Option<serenity::User>,
+    #[description = "RAM in GB (admin only)"] ram_gb: Option<f32>,
 ) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
 
-    let user_id = ctx.author().id.get();
+    let is_admin = check_administrator(&ctx).await;
+
+    let ram_gb = if is_admin {
+        ram_gb.unwrap_or(2.0)
+    } else {
+        if ram_gb.is_some() {
+            ctx.say("❌ Only administrators can configure server RAM!").await?;
+            return Ok(());
+        }
+        1.0
+    };
+
+    let target_user = if let Some(user) = user {
+        if !check_administrator(&ctx).await {
+            ctx.say("❌ Administrator permission required to create servers for others!").await?;
+            return Ok(());
+        }
+        user
+    } else {
+        ctx.author().clone()
+    };
+
+    let user_id = target_user.id.get();
+    let current_servers = ctx.data().dbs.testing.get_user_servers(user_id).await;
+    let user_limit = ctx.data().dbs.testing.get_user_limit(user_id).await;
+
+    if current_servers.len() >= user_limit {
+        ctx.say(format!(
+            "❌ User has reached their server limit ({}/{})",
+            current_servers.len(), user_limit
+        )).await?;
+        return Ok(());
+    }
 
     let modrinth_id = match ctx.data().dbs.modrinth.get_modrinth_id(user_id).await {
         Some(id) => id,
@@ -36,43 +99,27 @@ pub async fn create(
         }
     };
 
-    let username = ctx.author().name.clone();
+    let username = target_user.name.clone();
     let server_name = name
         .map(|n| n.trim().to_string())
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| format!("{}'s Test Server", username));
 
-    if let Some(existing) = ctx.data().dbs.testing.get_user_server(user_id).await {
-        let expires = existing
-            .expires_at
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        ctx.say(format!(
-            "❌ You already have an active test server:\n> **{}**\n> Expires <t:{}:R>\n> Manage at: https://modrinth.com/servers/manage/{}",
-            existing.name,
-            expires,
-            existing.server_id
-        )).await?;
-        return Ok(());
-    }
-
     let duration = Duration::from_secs(hours.unwrap_or(8) * 3600);
-    if duration > MAX_DURATION {
-        ctx.say("❌ Maximum server duration is 24 hours!").await?;
+    if !is_admin && duration > MAX_DURATION {
+        ctx.say("❌ Maximum server duration is 24 hours for non-administrator users!").await?;
         return Ok(());
     }
 
     ctx.defer().await?;
 
-    let base_ram = 2048;
+    let base_ram = (ram_gb * 1024.0) as u32;
     let payload = json!({
         "user_id": modrinth_id,
         "name": server_name,
         "testing": true,
         "specs": {
-            "cpu": 2,
+            "cpu": ((base_ram as f32 / 2048.0).ceil() as u32).max(2), // Minimum 2 CPUs, no max
             "memory_mb": base_ram,
             "swap_mb": base_ram / 4,
             "storage_mb": base_ram * 8,
@@ -84,15 +131,13 @@ pub async fn create(
         }
     });
 
-    let client = reqwest::Client::new();
-    let response = client
-        .post("https://archon.pyro.host/modrinth/v0/servers/create")
-        .header("X-MASTER-KEY", &ctx.data().config.master_key)
-        .json(&payload)
-        .send()
-        .await?;
+    let response = send_api_request(
+        ctx.clone(),
+        "https://archon.pyro.host/modrinth/v0/servers/create",
+        reqwest::Method::POST,
+        Some(payload),
+    ).await?;
 
-    let response: Value = response.json().await?;
     let server_id = response["uuid"]
         .as_str()
         .ok_or("Invalid server ID in response")?;
@@ -105,21 +150,75 @@ pub async fn create(
         expires_at: SystemTime::now() + duration,
     };
 
-    let expires_at = server
-        .expires_at
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-
+    let expires_at = server.expires_at;
     ctx.data().dbs.testing.add_server(server).await?;
 
+    let expiry_str = format_expiry(expires_at).await;
+
     ctx.say(format!(
-        "✅ Created test server successfully!\n> **{}**\n> Expires <t:{}:R>\n> Manage at: https://modrinth.com/servers/manage/{}",
+        "✅ Created test server successfully!\n> **{}**\n> Expires {}\n> Manage at: https://modrinth.com/servers/manage/{}",
         server_name,
-        expires_at,
+        expiry_str,
         server_id
     )).await?;
 
+    Ok(())
+}
+
+/// Set the maximum number of test servers a user can create
+/// 
+/// Administrators can grant users the ability to create multiple test servers simultaneously.
+/// The default limit is 1 server per user.
+#[command(
+    slash_command,
+    guild_only,
+    required_permissions = "ADMINISTRATOR",
+    ephemeral
+)]
+pub async fn setlimit(
+    ctx: Context<'_>,
+    #[description = "User to modify limit for"] user: serenity::User,
+    #[description = "New server limit (default: 1)"]
+    #[min = 1]
+    #[max = 10]
+    limit: Option<usize>,
+) -> Result<(), Error> {
+    let limit = limit.unwrap_or(1);
+    ctx.data().dbs.testing.set_user_limit(user.id.get(), limit).await?;
+
+    ctx.say(format!(
+        "✅ Set {}'s server limit to {}",
+        user.name, limit
+    )).await?;
+    Ok(())
+}
+
+/// View all users with custom server limits
+/// 
+/// Shows a list of users who have been granted permission to create multiple test servers.
+/// Users not listed have the default limit of 1 server.
+#[command(
+    slash_command,
+    guild_only,
+    required_permissions = "ADMINISTRATOR",
+    ephemeral
+)]
+pub async fn limits(ctx: Context<'_>) -> Result<(), Error> {
+    let limits = ctx.data().dbs.testing
+        .read(|db| db.user_limits.clone())
+        .await;
+
+    if limits.is_empty() {
+        ctx.say("📊 No custom server limits set.").await?;
+        return Ok(());
+    }
+
+    let mut response = String::from("📊 **Custom Server Limits**\n");
+    for (user_id, limit) in limits {
+        response.push_str(&format!("• <@{}> - {} servers\n", user_id, limit));
+    }
+
+    ctx.say(response).await?;
     Ok(())
 }
 
@@ -163,6 +262,9 @@ async fn autocomplete_server_id<'a>(
 }
 
 /// Delete a test server
+/// 
+/// Removes a test server immediately. Administrators can delete any server,
+/// while regular users can only delete their own servers.
 #[command(
     slash_command,
     guild_only,
@@ -171,7 +273,7 @@ async fn autocomplete_server_id<'a>(
 )]
 pub async fn delete(
     ctx: Context<'_>,
-    #[description = "Specific server ID to delete (administrators only)"]
+    #[description = "Server to delete (admins can delete any server)"]
     #[autocomplete = "autocomplete_server_id"]
     server_id: Option<String>,
 ) -> Result<(), Error> {
@@ -180,16 +282,7 @@ pub async fn delete(
     let user_id = ctx.author().id.get();
 
     let server = if let Some(server_id) = server_id {
-        if !ctx
-            .author_member()
-            .await
-            .and_then(|m| {
-                ctx.guild().map(|g| {
-                    g.user_permissions_in(&g.channels[&g.rules_channel_id.unwrap_or_default()], &m)
-                })
-            })
-            .map_or(false, |p| p.administrator())
-        {
+        if !check_administrator(&ctx).await {
             ctx.say("❌ Administrator permission required to delete other servers!")
                 .await?;
             return Ok(());
@@ -280,7 +373,15 @@ pub async fn delete(
 }
 
 /// List all active test servers
-#[command(slash_command, guild_only, ephemeral, required_permissions = "MANAGE_CHANNELS")]
+/// 
+/// Shows all currently running test servers, their owners, creation times,
+/// and expiration times.
+#[command(
+    slash_command,
+    guild_only,
+    ephemeral,
+    required_permissions = "MANAGE_CHANNELS"
+)]
 pub async fn list(ctx: Context<'_>) -> Result<(), Error> {
     let servers = ctx
         .data()
@@ -317,7 +418,10 @@ pub async fn list(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-/// Extend your test server's lifetime
+/// Extend a test server's lifetime
+/// 
+/// Adds more time before the server is automatically deleted.
+/// Regular users are limited to 24h extensions, while administrators can extend indefinitely.
 #[command(
     slash_command,
     guild_only,
@@ -326,12 +430,18 @@ pub async fn list(ctx: Context<'_>) -> Result<(), Error> {
 )]
 pub async fn extend(
     ctx: Context<'_>,
-    #[description = "Additional hours to add (max: 24)"]
-    #[min = 1]
-    #[max = 24]
+    #[description = "Additional hours (admins: unlimited, others: max 24)"]
     hours: u64,
 ) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
+
+    let is_admin = check_administrator(&ctx).await;
+    let duration = Duration::from_secs(hours * 3600);
+    
+    if !is_admin && duration > MAX_DURATION {
+        ctx.say("❌ Maximum extension is 24 hours for non-administrator users!").await?;
+        return Ok(());
+    }
 
     let user_id = ctx.author().id.get();
 
@@ -342,12 +452,6 @@ pub async fn extend(
             return Ok(());
         }
     };
-
-    let duration = Duration::from_secs(hours * 3600);
-    if duration > MAX_DURATION {
-        ctx.say("❌ Maximum extension is 24 hours!").await?;
-        return Ok(());
-    }
 
     ctx.data()
         .dbs

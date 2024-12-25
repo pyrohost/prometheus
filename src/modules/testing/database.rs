@@ -15,6 +15,7 @@ pub struct TestServer {
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct TestingDatabase {
     pub servers: HashMap<String, TestServer>,
+    pub user_limits: HashMap<u64, usize>,
 }
 
 impl Database<TestingDatabase> {
@@ -49,6 +50,35 @@ impl Database<TestingDatabase> {
             } else {
                 Err("Server not found".to_string())
             }
+        })
+        .await
+        .map_err(|e| e.to_string())
+    }
+
+    pub async fn get_user_servers(&self, user_id: u64) -> Vec<TestServer> {
+        self.read(|db| {
+            db.servers
+                .values()
+                .filter(|s| s.user_id == user_id)
+                .cloned()
+                .collect()
+        })
+        .await
+    }
+
+    pub async fn get_user_limit(&self, user_id: u64) -> usize {
+        self.read(|db| db.user_limits.get(&user_id).cloned().unwrap_or(1))
+            .await
+    }
+
+    pub async fn set_user_limit(&self, user_id: u64, limit: usize) -> Result<(), String> {
+        self.transaction(|db| {
+            if limit == 1 {
+                db.user_limits.remove(&user_id);
+            } else {
+                db.user_limits.insert(user_id, limit);
+            }
+            Ok(())
         })
         .await
         .map_err(|e| e.to_string())

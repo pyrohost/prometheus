@@ -24,7 +24,7 @@ impl TestingTask {
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let client = reqwest::Client::new();
         client
-            .delete(format!(
+            .post(format!(
                 "https://archon.pyro.host/modrinth/v0/servers/{}/delete",
                 server_id
             ))

@@ -5,6 +5,7 @@ use poise::{command, CreateReply};
 use serde_json::{json, Value};
 use std::time::{Duration, SystemTime};
 use reqwest::Client;
+use tracing::error;
 
 const MAX_DURATION: Duration = Duration::from_secs(24 * 60 * 60);
 
@@ -38,7 +39,7 @@ async fn send_api_request(
 
 async fn check_administrator(ctx: &Context<'_>) -> bool {
     let Some(member) = ctx.author_member().await else { return false };
-    let Some(guild) = ctx.guild() else { return false };
+    let Some(_guild) = ctx.guild() else { return false };
 
     member.permissions.map_or(false, |p| p.administrator())
 }
@@ -261,9 +262,9 @@ async fn autocomplete_server_id<'a>(
         .into_iter()
 }
 
-/// Delete a test server
+/// Delete test servers
 /// 
-/// Removes a test server immediately. Administrators can delete any server,
+/// Removes one or more test servers immediately. Administrators can delete any server,
 /// while regular users can only delete their own servers.
 #[command(
     slash_command,
@@ -273,101 +274,143 @@ async fn autocomplete_server_id<'a>(
 )]
 pub async fn delete(
     ctx: Context<'_>,
-    #[description = "Server to delete (admins can delete any server)"]
+    #[description = "Specific server to delete (admins only)"]
     #[autocomplete = "autocomplete_server_id"]
     server_id: Option<String>,
+    #[description = "Delete all of your servers"] 
+    all: Option<bool>,
 ) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
 
+    let is_admin = check_administrator(&ctx).await;
     let user_id = ctx.author().id.get();
 
-    let server = if let Some(server_id) = server_id {
-        if !check_administrator(&ctx).await {
-            ctx.say("❌ Administrator permission required to delete other servers!")
+    let servers = if let Some(server_id) = server_id {
+        // Admin deleting specific server
+        if !is_admin {
+            ctx.say("❌ Administrator permission required to delete specific servers!")
                 .await?;
             return Ok(());
         }
 
-        ctx.data()
+        if let Some(server) = ctx.data()
             .dbs
             .testing
             .read(|db| db.servers.get(&server_id).cloned())
             .await
-    } else {
-        ctx.data().dbs.testing.get_user_server(user_id).await
-    };
-
-    let server = match server {
-        Some(s) => s,
-        None => {
+        {
+            vec![server]
+        } else {
             ctx.say("❌ Server not found!").await?;
+            return Ok(());
+        }
+    } else if all.unwrap_or(false) {
+        // Deleting all user's servers
+        let servers = ctx.data().dbs.testing.get_user_servers(user_id).await;
+        if servers.is_empty() {
+            ctx.say("❌ You don't have any active servers!").await?;
+            return Ok(());
+        }
+        servers
+    } else {
+        // Deleting single user server
+        if let Some(server) = ctx.data().dbs.testing.get_user_server(user_id).await {
+            vec![server]
+        } else {
+            ctx.say("❌ You don't have an active server!").await?;
             return Ok(());
         }
     };
 
-    let created_at = server
-        .created_at
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let count = servers.len();
+    let multiple = count > 1;
+
+    let confirmation = format!(
+        "🗑️ Are you sure you want to delete {} test {}?\n{}",
+        if multiple { format!("these {} ", count) } else { "this".into() },
+        if multiple { "servers" } else { "server" },
+        servers.iter().map(|s| format!(
+            "> **{}**\n> Created <t:{}:R>{}",
+            s.name,
+            s.created_at.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs(),
+            if is_admin && s.user_id != user_id {
+                format!("\n> Owner: <@{}>", s.user_id)
+            } else {
+                String::new()
+            }
+        )).collect::<Vec<_>>().join("\n\n")
+    );
 
     let button = CreateButton::new("confirm")
         .style(ButtonStyle::Danger)
-        .label("Delete Server");
+        .label(format!("Delete {}", if multiple { "Servers" } else { "Server" }));
 
     let action_row = CreateActionRow::Buttons(vec![button]);
-
-    let owner_note = if server.user_id != user_id {
-        format!("\n> Owner: <@{}>", server.user_id)
-    } else {
-        String::new()
-    };
-
     let reply = CreateReply::default()
-        .ephemeral(true)
-        .content(format!(
-            "🗑️ Are you sure you want to delete this test server?\n> **{}**\n> Created <t:{}:R>{}",
-            server.name, created_at, owner_note
-        ))
+        .content(confirmation)
         .components(vec![action_row]);
 
     let confirm = ctx.send(reply).await?;
-
-    let user_id = ctx.author().id;
     let interaction = confirm
         .message()
         .await?
         .await_component_interaction(ctx.serenity_context())
-        .author_id(user_id)
+        .author_id(ctx.author().id)
         .timeout(Duration::from_secs(30))
         .await;
 
     let Some(interaction) = interaction else {
-        let edit_reply = CreateReply::default().content("❌ Operation timed out");
-        confirm.edit(ctx, edit_reply).await?;
+        confirm.edit(ctx, CreateReply::default()
+            .content("❌ Operation timed out")
+            .components(vec![]))
+            .await?;
         return Ok(());
     };
 
-    interaction.defer_ephemeral(ctx).await?;
+    interaction.defer_ephemeral(ctx.serenity_context()).await?;
 
     let client = reqwest::Client::new();
-    client
-        .post(format!(
-            "https://archon.pyro.host/modrinth/v0/servers/{}/delete",
-            server.server_id
-        ))
-        .header("X-MASTER-KEY", &ctx.data().config.master_key)
-        .send()
-        .await?;
+    let mut deleted = 0;
 
-    ctx.data()
-        .dbs
-        .testing
-        .remove_server(&server.server_id)
-        .await?;
+    for server in &servers {
+        match client
+            .post(format!(
+                "https://archon.pyro.host/modrinth/v0/servers/{}/delete",
+                server.server_id
+            ))
+            .header("X-MASTER-KEY", &ctx.data().config.master_key)
+            .send()
+            .await
+        {
+            Ok(_) => {
+                if let Err(e) = ctx.data()
+                    .dbs
+                    .testing
+                    .remove_server(&server.server_id)
+                    .await
+                {
+                    error!("Failed to remove server from database: {}", e);
+                } else {
+                    deleted += 1;
+                }
+            }
+            Err(e) => error!("Failed to delete server {}: {}", server.server_id, e),
+        }
+    }
 
-    let edit_reply = CreateReply::default().content("✅ Test server deleted successfully!");
-    confirm.edit(ctx, edit_reply).await?;
+    let status = if deleted == count {
+        format!("✅ Successfully deleted {} {}!", 
+            if multiple { format!("all {}", count) } else { "the".into() },
+            if multiple { "servers" } else { "server" }
+        )
+    } else {
+        format!("⚠️ Partially deleted servers ({}/{})", deleted, count)
+    };
+
+    confirm.edit(ctx, CreateReply::default()
+        .content(status)
+        .components(vec![]))
+        .await?;
 
     Ok(())
 }

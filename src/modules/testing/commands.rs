@@ -54,11 +54,24 @@ pub async fn create(
     #[description = "Server name (defaults to your username)"] name: Option<String>,
     #[description = "Lifetime in hours (admins: unlimited, others: max 24)"] hours: Option<u64>,
     #[description = "Create for another user (admin only)"] user: Option<serenity::User>,
+    #[description = "Create for specific Modrinth ID (admin only)"] modrinth_id: Option<String>,
     #[description = "RAM in GB (admin only)"] ram_gb: Option<f32>,
 ) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
 
     let is_admin = check_administrator(&ctx).await;
+
+    // Ensure only admins can use user/modrinth_id parameters
+    if (user.is_some() || modrinth_id.is_some()) && !is_admin {
+        ctx.say("❌ Administrator permission required to create servers for others!").await?;
+        return Ok(());
+    }
+
+    // Ensure only one of user or modrinth_id is specified
+    if user.is_some() && modrinth_id.is_some() {
+        ctx.say("❌ Cannot specify both user and Modrinth ID!").await?;
+        return Ok(());
+    }
 
     let ram_gb = if is_admin {
         ram_gb.unwrap_or(2.0)
@@ -70,17 +83,31 @@ pub async fn create(
         1.0
     };
 
-    let target_user = if let Some(user) = user {
-        if !check_administrator(&ctx).await {
-            ctx.say("❌ Administrator permission required to create servers for others!").await?;
-            return Ok(());
+    // Resolve user ID and Modrinth ID
+    let (user_id, modrinth_id) = if let Some(ref target_user) = user {
+        let user_id = target_user.id.get();
+        match ctx.data().dbs.modrinth.get_modrinth_id(user_id).await {
+            Some(id) => (user_id, id),
+            None => {
+                ctx.say("❌ Target user has not linked their Modrinth account!").await?;
+                return Ok(());
+            }
         }
-        user
+    } else if let Some(mid) = modrinth_id {
+        // When using direct Modrinth ID, use the admin's user ID
+        (ctx.author().id.get(), mid)
     } else {
-        ctx.author().clone()
+        // Default case - use command author
+        let user_id = ctx.author().id.get();
+        match ctx.data().dbs.modrinth.get_modrinth_id(user_id).await {
+            Some(id) => (user_id, id),
+            None => {
+                ctx.say("❌ Please link your Modrinth account first:\n> Use `/modrinth link` to get started").await?;
+                return Ok(());
+            }
+        }
     };
 
-    let user_id = target_user.id.get();
     let current_servers = ctx.data().dbs.testing.get_user_servers(user_id).await;
     let user_limit = ctx.data().dbs.testing.get_user_limit(user_id).await;
 
@@ -92,15 +119,12 @@ pub async fn create(
         return Ok(());
     }
 
-    let modrinth_id = match ctx.data().dbs.modrinth.get_modrinth_id(user_id).await {
-        Some(id) => id,
-        None => {
-            ctx.say("❌ Please link your Modrinth account first:\n> Use `/modrinth link` to get started").await?;
-            return Ok(());
-        }
+    let username = if let Some(u) = user {
+        u.name.clone()
+    } else {
+        ctx.author().name.clone()
     };
 
-    let username = target_user.name.clone();
     let server_name = name
         .map(|n| n.trim().to_string())
         .filter(|n| !n.is_empty())

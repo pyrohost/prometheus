@@ -393,6 +393,12 @@ pub async fn delete(
 
     interaction.defer_ephemeral(ctx.serenity_context()).await?;
 
+    // Update message to show deletion in progress
+    confirm.edit(ctx, CreateReply::default()
+        .content("🔄 Deleting server(s)...")
+        .components(vec![]))
+        .await?;
+
     let client = reqwest::Client::new();
     let mut deleted = 0;
 
@@ -422,6 +428,7 @@ pub async fn delete(
         }
     }
 
+    // Show final status after deletion is complete
     let status = if deleted == count {
         format!("✅ Successfully deleted {} {}!", 
             if multiple { format!("all {}", count) } else { "the".into() },

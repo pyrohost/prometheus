@@ -399,7 +399,7 @@ pub async fn vote(ctx: Context<'_>) -> Result<(), Error> {
         }
     }
 
-    ctx.say("⌛ Time's up! Feel free to `/vote` again anytime.")
+    ctx.say("⌛ Time's up! Feel free to `/lorax vote` again anytime.")
         .await?;
     Ok(())
 }

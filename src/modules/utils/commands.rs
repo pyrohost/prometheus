@@ -29,8 +29,10 @@ impl ServerEntry {
             .split('-')
             .nth(1)?
             .trim()
-            .split("GB")
-            .next()?
+            .split_whitespace()
+            .take_while(|&part| !part.ends_with("GB"))
+            .collect::<Vec<_>>()
+            .join(" ")
             .trim()
             .to_string();
 
@@ -103,20 +105,53 @@ impl ServerEntry {
 )]
 pub async fn server_costs<'a>(
     ctx: Context<'a>,
-    #[description = "Server list (paste the full list)"] input: String,
+    #[description = "Optional file containing server list"] file: Option<poise::serenity_prelude::Attachment>,
+    #[description = "Server list (paste the full text if no file)"] input: Option<String>,
 ) -> Result<(), Error> {
-    let servers: Vec<ServerEntry> = input
+    // 1) Prepare raw data buffer
+    let raw_data = if let Some(attachment) = file {
+        // If file is uploaded, fetch contents
+        let bytes = attachment.download().await.map_err(|e| {
+            format!("Failed to download attachment: {e}")
+        })?;
+        String::from_utf8_lossy(&bytes).to_string()
+    } else {
+        // Otherwise, fallback to user-provided input or empty string
+        input.unwrap_or_default()
+    };
+
+    // 2) Clean up input data
+    let cleaned_input = raw_data
+        .replace("\r\n", "\n")
+        .replace('\t', " ")
+        .lines()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // 3) Parse server blocks
+    let servers: Vec<ServerEntry> = cleaned_input
         .split("Rapid Deploy Server")
         .filter(|block| !block.trim().is_empty())
-        .map(|block| format!("Rapid Deploy Server{}", block))
         .filter_map(|block| {
-            if let Some(server) = ServerEntry::parse(&block) {
-                Some(server)
+            let full_block = if block.trim().starts_with('-') {
+                format!("Rapid Deploy Server{}", block)
             } else {
-                None
+                format!("Rapid Deploy Server - {}", block)
+            };
+            match ServerEntry::parse(&full_block) {
+                Some(server) if server.price > 0.0
+                    && server.date > chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap() =>
+                {
+                    Some(server)
+                }
+                _ => None,
             }
         })
         .collect();
+
+    println!("Parsed {} server entries", servers.len());
 
     let current_month = Utc::now().month();
     let current_year = Utc::now().year();

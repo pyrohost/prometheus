@@ -217,19 +217,6 @@ pub async fn server_costs<'a>(
         ));
     }
 
-    response.push_str("\n**Servers Due This Month:**\n");
-    for server in &current_servers {
-        response.push_str(&format!(
-            "• {} ({}) - ${:.2} USD\n  Payment Due: {}\n  Location: {}\n  Status: {}\n",
-            server.name,
-            server.hostname,
-            server.price,
-            server.date.format("%m/%d/%Y"),
-            server.location,
-            server.payment_period
-        ));
-    }
-
     response.push_str(&format!(
         "\n**Financial Summary:**\n• Current Period Total: ${:.2} USD\n• Average Cost per Server: ${:.2} USD",
         total_cost,

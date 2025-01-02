@@ -1,6 +1,6 @@
+use crate::{Context, Error};
 use chrono::{Datelike, NaiveDate, Utc};
 use std::collections::HashMap;
-use crate::{Context, Error};
 
 #[derive(Debug)]
 struct ServerEntry {
@@ -10,53 +10,59 @@ struct ServerEntry {
     date: NaiveDate,
     location: String,
     cpu_model: String,
-    payment_period: String,  // Add this new field
+    payment_period: String,
 }
 
 impl ServerEntry {
     fn parse(block: &str) -> Option<Self> {
-        let lines: Vec<&str> = block.lines().collect();
+        let lines: Vec<&str> = block
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .collect();
+
         if lines.len() < 3 {
             return None;
         }
 
-        let name = lines[0].trim().to_string();
-        
-        // Parse CPU model
+        let name = lines[0].trim();
         let cpu_model = name
             .split('-')
             .nth(1)?
             .trim()
-            .split("192GB")
+            .split("GB")
             .next()?
             .trim()
             .to_string();
 
-        // Parse hostname and price
-        let hostname_line = lines[1].trim();
-        let hostname = hostname_line.split_whitespace().next()?.to_string();
-        let price = hostname_line
+        let hostname_price_line = lines[1].trim();
+        let hostname = hostname_price_line
+            .split_whitespace()
+            .next()?
+            .trim()
+            .to_string();
+
+        let price = hostname_price_line
             .split('$')
             .nth(1)?
             .split_whitespace()
             .next()?
+            .trim()
             .parse::<f64>()
             .ok()?;
 
-        // Parse date with payment period determination
-        let date_str = lines[2].split_whitespace().nth(1)?;
+        let date_str = lines[2].split_whitespace().nth(1)?.trim();
         let date = NaiveDate::parse_from_str(date_str, "%m/%d/%Y").ok()?;
-        
+
         let now = Utc::now().naive_utc().date();
         let payment_period = if date.month() == now.month() && date.year() == now.year() {
-            "Current Month".to_string()
+            "Current Month"
         } else if date > now {
-            "Future".to_string()
+            "Future"
         } else {
-            "Past".to_string()
-        };
+            "Past"
+        }
+        .to_string();
 
-        // Parse location
         let location = if hostname.contains("mia") {
             "Miami"
         } else if hostname.contains("lax") {
@@ -65,10 +71,11 @@ impl ServerEntry {
             "New York"
         } else {
             "Other"
-        }.to_string();
+        }
+        .to_string();
 
         Some(ServerEntry {
-            name,
+            name: name.to_string(),
             hostname,
             price,
             date,
@@ -80,29 +87,43 @@ impl ServerEntry {
 }
 
 /// Analyzes server costs and provides a detailed breakdown
-/// 
+///
 /// This command calculates:
 /// - Total costs for the current payment period
 /// - Location-based cost distribution
 /// - CPU model distribution
 /// - Payment schedule analysis
-/// 
+///
 /// The analysis excludes servers with due dates outside the current payment period.
-#[poise::command(slash_command, guild_only, required_permissions = "ADMINISTRATOR", ephemeral)]
+#[poise::command(
+    slash_command,
+    guild_only,
+    required_permissions = "ADMINISTRATOR",
+    ephemeral
+)]
 pub async fn server_costs<'a>(
     ctx: Context<'a>,
     #[description = "Server list (paste the full list)"] input: String,
 ) -> Result<(), Error> {
+    let servers: Vec<ServerEntry> = input
+        .split("Rapid Deploy Server")
+        .filter(|block| !block.trim().is_empty())
+        .map(|block| format!("Rapid Deploy Server{}", block))
+        .filter_map(|block| {
+            if let Some(server) = ServerEntry::parse(&block) {
+                Some(server)
+            } else {
+                None
+            }
+        })
+        .collect();
+
     let current_month = Utc::now().month();
     let current_year = Utc::now().year();
 
-    let servers: Vec<ServerEntry> = input
-        .split("\n\n")
-        .filter_map(ServerEntry::parse)
-        .collect();
-
     if servers.is_empty() {
-        ctx.say("❌ No valid server entries found in input.").await?;
+        ctx.say("❌ No valid server entries found in input.")
+            .await?;
         return Ok(());
     }
 
@@ -112,7 +133,8 @@ pub async fn server_costs<'a>(
         .collect();
 
     if current_servers.is_empty() {
-        ctx.say("❌ No servers due for payment in the current period.").await?;
+        ctx.say("❌ No servers due for payment in the current period.")
+            .await?;
         return Ok(());
     }
 
@@ -120,7 +142,6 @@ pub async fn server_costs<'a>(
     let mut location_costs: HashMap<String, (i32, f64)> = HashMap::new();
     let mut cpu_counts: HashMap<String, i32> = HashMap::new();
 
-    // Calculate statistics
     for server in &current_servers {
         let entry = location_costs
             .entry(server.location.clone())
@@ -131,11 +152,16 @@ pub async fn server_costs<'a>(
         *cpu_counts.entry(server.cpu_model.clone()).or_insert(0) += 1;
     }
 
-    // Build response
-    let mut response = format!("🔒 **Server Cost Analysis for {}/{}**\n\n", current_month, current_year);
-    
+    let mut response = format!(
+        "🔒 **Server Cost Analysis for {}/{}**\n\n",
+        current_month, current_year
+    );
+
     response.push_str("**Payment Period Breakdown:**\n");
-    response.push_str(&format!("• Due this month: {} servers\n", current_servers.len()));
+    response.push_str(&format!(
+        "• Due this month: {} servers\n",
+        current_servers.len()
+    ));
     response.push_str(&format!("• Total servers: {}\n\n", servers.len()));
 
     response.push_str("**Location Distribution:**\n");
@@ -150,7 +176,10 @@ pub async fn server_costs<'a>(
     response.push_str("\n**CPU Distribution:**\n");
     for (cpu, count) in &cpu_counts {
         let percentage = (count * 100) as f64 / current_servers.len() as f64;
-        response.push_str(&format!("• {} - {} units ({:.1}%)\n", cpu, count, percentage));
+        response.push_str(&format!(
+            "• {} - {} units ({:.1}%)\n",
+            cpu, count, percentage
+        ));
     }
 
     response.push_str("\n**Servers Due This Month:**\n");

@@ -23,6 +23,7 @@ pub mod users;
         "settings::view",
         "users::submit",
         "users::vote",
+        "users::check",
     )
 )]
 pub async fn lorax(_ctx: crate::Context<'_>) -> Result<(), crate::Error> {

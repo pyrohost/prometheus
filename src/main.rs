@@ -6,6 +6,7 @@ use modules::{
     stats::{stats, task::StatsTask},
     system::events::ReadyHandler,
     testing::{task::TestingTask, testing},
+    utils::server_costs,
 };
 use poise::serenity_prelude::{self as serenity, CreateAllowedMentions};
 use std::sync::Arc;
@@ -84,7 +85,7 @@ async fn main() {
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions::<Data, Error> {
             allowed_mentions: Some(CreateAllowedMentions::new().empty_roles().empty_users()),
-            commands: vec![register(), lorax(), stats(), testing(), modrinth()],
+            commands: vec![register(), lorax(), stats(), testing(), modrinth(), server_costs()],
             pre_command: |ctx| {
                 Box::pin(async move {
                     trace!(

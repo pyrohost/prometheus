@@ -404,6 +404,46 @@ pub async fn vote(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
+/// Checks if the given tree name is taken by a node in the cluster.
+#[command(slash_command, guild_only, ephemeral)]
+pub async fn check(
+    ctx: Context<'_>,
+    #[description = "Tree name to check"] name: String,
+) -> Result<(), Error> {
+    ctx.defer_ephemeral().await?;
+
+    let name = name.to_lowercase().trim().to_string();
+
+    if !is_valid_tree_name(&name) {
+        ctx.say(
+            "❌ Invalid tree name. Please ensure it is between 3 and 32 alphabetic characters.",
+        )
+        .await?;
+        return Ok(());
+    }
+
+    match fetch_node_names().await {
+        Ok(node_names) => {
+            if node_names.contains(&name) {
+                ctx.say(
+                    "🌲 That tree name is already in use as a node name. Please choose another!",
+                )
+                .await?;
+            } else {
+                ctx.say("🌳 That tree name is available! Go ahead and submit it.")
+                    .await?;
+            }
+        }
+        Err(e) => {
+            error!("Failed to fetch node names: {}", e);
+            ctx.say("❌ Failed to fetch node names. Please try again later.")
+                .await?;
+        }
+    }
+
+    Ok(())
+}
+
 fn is_voting_stage(stage: &LoraxStage) -> bool {
     matches!(stage, LoraxStage::Voting | LoraxStage::Tiebreaker(_))
 }

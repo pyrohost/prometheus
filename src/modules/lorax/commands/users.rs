@@ -5,9 +5,7 @@ use crate::{
 use poise::{
     command,
     serenity_prelude::{
-        ButtonStyle, ComponentInteractionDataKind, CreateActionRow, CreateButton,
-        CreateInteractionResponse, CreateInteractionResponseMessage, CreateSelectMenu,
-        CreateSelectMenuKind, CreateSelectMenuOption,
+        self as serenity, ButtonStyle, ComponentInteractionDataKind, CreateActionRow, CreateButton, CreateInteractionResponse, CreateInteractionResponseMessage, CreateSelectMenu, CreateSelectMenuKind, CreateSelectMenuOption
     },
     CreateReply,
 };
@@ -340,59 +338,8 @@ pub async fn vote(ctx: Context<'_>) -> Result<(), Error> {
                 if let ComponentInteractionDataKind::StringSelect { values, .. } =
                     &interaction.data.kind
                 {
-                    let selected_tree = values.first().ok_or("No selection made")?;
-
-                    match ctx
-                        .data()
-                        .dbs
-                        .lorax
-                        .transaction(|db| {
-                            let event = db
-                                .events
-                                .get_mut(&guild_id)
-                                .ok_or_else(|| "No active event".to_string())?;
-
-                            let old_vote =
-                                event.tree_votes.insert(user_id, selected_tree.to_string());
-
-                            if let Some(old) = old_vote {
-                                Ok(format!(
-                                    "Changed vote from \"{}\" to \"{}\"",
-                                    old, selected_tree
-                                ))
-                            } else {
-                                Ok("Vote recorded!".to_string())
-                            }
-                        })
-                        .await
-                    {
-                        Ok(msg) => {
-                            interaction
-                                .create_response(
-                                    &ctx.serenity_context().http,
-                                    CreateInteractionResponse::UpdateMessage(
-                                        CreateInteractionResponseMessage::new()
-                                            .content(format!("✅ {}", msg))
-                                            .components(vec![]),
-                                    ),
-                                )
-                                .await?;
-                            return Ok(());
-                        }
-                        Err(e) => {
-                            interaction
-                                .create_response(
-                                    &ctx.serenity_context().http,
-                                    CreateInteractionResponse::UpdateMessage(
-                                        CreateInteractionResponseMessage::new()
-                                            .content(format!("❌ Unable to cast vote: {}", e))
-                                            .components(vec![]),
-                                    ),
-                                )
-                                .await?;
-                            return Ok(());
-                        }
-                    }
+                    handle_vote_selection(&ctx, &interaction, values, guild_id, user_id).await?;
+                    return Ok(());
                 }
             }
             _ => return Err("Unexpected event type id".into()),
@@ -448,11 +395,89 @@ fn is_voting_stage(stage: &LoraxStage) -> bool {
     matches!(stage, LoraxStage::Voting | LoraxStage::Tiebreaker(_))
 }
 
-fn get_available_trees(event: &LoraxEvent, user_id: u64) -> Vec<String> {
+fn get_available_trees(event: &LoraxEvent, _user_id: u64) -> Vec<String> {
     event
         .tree_submissions
         .iter()
-        .filter(|(&submitter_id, _)| submitter_id != user_id)
         .map(|(_, tree)| tree.clone())
         .collect()
+}
+
+async fn handle_vote_selection(
+    ctx: &Context<'_>,
+    interaction: &serenity::ComponentInteraction,
+    values: &[String],
+    guild_id: u64,
+    user_id: u64,
+) -> Result<(), Error> {
+    let selected_tree = values.first().ok_or("No selection made")?;
+
+    // Check if user is trying to vote for their own submission
+    let event = ctx.data().dbs.lorax.get_event(guild_id).await.unwrap();
+    if let Some(submitter_id) = event.get_tree_submitter(selected_tree) {
+        if submitter_id == user_id {
+            interaction
+                .create_response(
+                    &ctx.serenity_context().http,
+                    CreateInteractionResponse::UpdateMessage(
+                        CreateInteractionResponseMessage::new()
+                            .content("❌ You cannot vote for your own submission!")
+                            .components(vec![]),
+                    ),
+                )
+                .await?;
+            return Ok(());
+        }
+    }
+
+    match ctx
+        .data()
+        .dbs
+        .lorax
+        .transaction(|db| {
+            let event = db
+                .events
+                .get_mut(&guild_id)
+                .ok_or_else(|| "No active event".to_string())?;
+
+            let old_vote = event.tree_votes.insert(user_id, selected_tree.to_string());
+
+            if let Some(old) = old_vote {
+                Ok(format!(
+                    "Changed vote from \"{}\" to \"{}\"",
+                    old, selected_tree
+                ))
+            } else {
+                Ok("Vote recorded!".to_string())
+            }
+        })
+        .await
+    {
+        Ok(msg) => {
+            interaction
+                .create_response(
+                    &ctx.serenity_context().http,
+                    CreateInteractionResponse::UpdateMessage(
+                        CreateInteractionResponseMessage::new()
+                            .content(format!("✅ {}", msg))
+                            .components(vec![]),
+                    ),
+                )
+                .await?;
+        }
+        Err(e) => {
+            interaction
+                .create_response(
+                    &ctx.serenity_context().http,
+                    CreateInteractionResponse::UpdateMessage(
+                        CreateInteractionResponseMessage::new()
+                            .content(format!("❌ Unable to cast vote: {}", e))
+                            .components(vec![]),
+                    ),
+                )
+                .await?;
+        }
+    }
+
+    Ok(())
 }

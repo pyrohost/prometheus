@@ -181,6 +181,54 @@ pub async fn duration(
     Ok(())
 }
 
+/// Set event phase durations
+#[command(slash_command, guild_only)]
+pub async fn durations(
+    ctx: Context<'_>,
+    #[description = "Minutes for submissions"] submission: Option<u64>,
+    #[description = "Minutes for voting"] voting: Option<u64>,
+    #[description = "Minutes for tiebreakers"] tiebreaker: Option<u64>,
+) -> Result<(), Error> {
+    let guild_id = ctx.guild_id().unwrap().get();
+
+    if submission.is_none() && voting.is_none() && tiebreaker.is_none() {
+        ctx.say("❌ Please specify at least one duration to update.")
+            .await?;
+        return Ok(());
+    }
+
+    match ctx
+        .data()
+        .dbs
+        .lorax
+        .transaction(|db| {
+            let settings = db.settings.entry(guild_id).or_default();
+            if let Some(mins) = submission {
+                settings.submission_duration = mins;
+            }
+            if let Some(mins) = voting {
+                settings.voting_duration = mins;
+            }
+            if let Some(mins) = tiebreaker {
+                settings.tiebreaker_duration = mins;
+            }
+            Ok(())
+        })
+        .await
+    {
+        Ok(_) => {
+            ctx.say("⏱️ Durations updated!").await?;
+        }
+        Err(e) => {
+            error!("Failed to update durations for guild {}: {}", guild_id, e);
+            ctx.say("❌ Failed to update durations. Please try again later.")
+                .await?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Reset Lorax settings and events
 #[command(slash_command, guild_only, required_permissions = "ADMINISTRATOR")]
 pub async fn reset(ctx: Context<'_>) -> Result<(), Error> {
@@ -210,10 +258,16 @@ pub async fn reset(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
+const ITEMS_PER_PAGE: usize = 12;
+
 /// View all submissions and who submitted them
 #[command(slash_command, guild_only, ephemeral)]
-pub async fn submissions(ctx: Context<'_>) -> Result<(), Error> {
+pub async fn submissions(
+    ctx: Context<'_>,
+    #[description = "Page number to view"] page: Option<usize>,
+) -> Result<(), Error> {
     let guild_id = ctx.guild_id().unwrap().get();
+    let page = page.unwrap_or(1).max(1);
 
     let event = match ctx.data().dbs.lorax.get_event(guild_id).await {
         Some(event) => event,
@@ -239,19 +293,32 @@ pub async fn submissions(ctx: Context<'_>) -> Result<(), Error> {
     let mut submissions: Vec<_> = event
         .tree_submissions
         .iter()
-        .map(|(user_id, tree)| format!("\"{}\" by <@{}>", tree, user_id))
+        .map(|(user_id, tree)| (tree.clone(), *user_id))
         .collect();
-    submissions.sort();
+    submissions.sort_by(|a, b| a.0.cmp(&b.0));
 
-    let msg = if submissions.is_empty() {
-        "📝 No submissions yet!".to_string()
-    } else {
-        format!(
-            "📋 **All Submissions ({})**:\n{}",
-            submissions.len(),
-            submissions.join("\n")
-        )
-    };
+    let total_pages = (submissions.len() + ITEMS_PER_PAGE - 1) / ITEMS_PER_PAGE;
+    if total_pages == 0 {
+        ctx.say("📝 No submissions yet!").await?;
+        return Ok(());
+    }
+
+    let current_page = page.min(total_pages);
+    let start = (current_page - 1) * ITEMS_PER_PAGE;
+    let end = (start + ITEMS_PER_PAGE).min(submissions.len());
+
+    let entries: Vec<_> = submissions[start..end]
+        .iter()
+        .map(|(tree, user_id)| format!("\"{}\" by <@{}>", tree, user_id))
+        .collect();
+
+    let msg = format!(
+        "📋 **All Submissions ({} total)**\nPage {}/{}\n\n{}",
+        submissions.len(),
+        current_page,
+        total_pages,
+        entries.join("\n")
+    );
 
     ctx.say(msg).await?;
     Ok(())
@@ -259,8 +326,12 @@ pub async fn submissions(ctx: Context<'_>) -> Result<(), Error> {
 
 /// View current vote counts for each tree
 #[command(slash_command, guild_only, ephemeral)]
-pub async fn votes(ctx: Context<'_>) -> Result<(), Error> {
+pub async fn votes(
+    ctx: Context<'_>,
+    #[description = "Page number to view"] page: Option<usize>,
+) -> Result<(), Error> {
     let guild_id = ctx.guild_id().unwrap().get();
+    let page = page.unwrap_or(1).max(1);
 
     let event = match ctx.data().dbs.lorax.get_event(guild_id).await {
         Some(event) => event,
@@ -285,36 +356,58 @@ pub async fn votes(ctx: Context<'_>) -> Result<(), Error> {
 
     let total_votes = event.tree_votes.len();
 
-    let mut vote_counts: std::collections::HashMap<String, usize> =
+    let mut vote_counts: std::collections::HashMap<String, (usize, Option<u64>)> =
         std::collections::HashMap::new();
+    
+    // Count votes and track submitters
     for tree in event.tree_votes.values() {
-        *vote_counts.entry(tree.clone()).or_insert(0) += 1;
+        let entry = vote_counts.entry(tree.clone()).or_insert((0, event.get_tree_submitter(tree)));
+        entry.0 += 1;
     }
 
     let mut vote_counts: Vec<_> = vote_counts.into_iter().collect();
-    vote_counts.sort_by(|a, b| b.1.cmp(&a.1));
+    vote_counts.sort_by(|a, b| b.1.0.cmp(&a.1.0).then_with(|| a.0.cmp(&b.0)));
 
-    let msg = if vote_counts.is_empty() {
-        "📝 No votes cast yet!".to_string()
-    } else {
-        let vote_lines: Vec<String> = vote_counts
-            .iter()
-            .map(|(tree, count)| {
-                let percentage = if total_votes > 0 {
-                    (*count as f64 / total_votes as f64) * 100.0
-                } else {
-                    0.0
-                };
-                format!("\"{}\" - {} votes ({:.1}%)", tree, count, percentage)
-            })
-            .collect();
+    if vote_counts.is_empty() {
+        ctx.say("📝 No votes cast yet!").await?;
+        return Ok(());
+    }
 
-        format!(
-            "🗳️ **Current Vote Counts ({})**:\n{}",
-            total_votes,
-            vote_lines.join("\n")
-        )
-    };
+    let total_pages = (vote_counts.len() + ITEMS_PER_PAGE - 1) / ITEMS_PER_PAGE;
+    let current_page = page.min(total_pages);
+    let start = (current_page - 1) * ITEMS_PER_PAGE;
+    let end = (start + ITEMS_PER_PAGE).min(vote_counts.len());
+
+    let entries: Vec<String> = vote_counts[start..end]
+        .iter()
+        .enumerate()
+        .map(|(i, (tree, (count, submitter)))| {
+            let rank = start + i + 1;
+            let medal = match rank {
+                1 => "🥇",
+                2 => "🥈",
+                3 => "🥉",
+                _ => "  ",
+            };
+            let percentage = (*count as f64 / total_votes as f64) * 100.0;
+            let submitter_text = submitter
+                .map(|uid| format!(" (by <@{}>)", uid))
+                .unwrap_or_default();
+            
+            format!(
+                "{} **{}**{} - {} votes ({:.1}%)",
+                medal, tree, submitter_text, count, percentage
+            )
+        })
+        .collect();
+
+    let msg = format!(
+        "🗳️ **Current Vote Counts ({} total votes)**\nPage {}/{}\n\n{}",
+        total_votes,
+        current_page,
+        total_pages,
+        entries.join("\n")
+    );
 
     ctx.say(msg).await?;
     Ok(())

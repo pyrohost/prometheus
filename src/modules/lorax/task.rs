@@ -124,20 +124,39 @@ impl LoraxEventTask {
     }
 
     pub async fn advance_stage(&mut self, ctx: &Context, event: &mut LoraxEvent) {
+        let old_stage = event.stage.clone();
+        
         match event.stage {
             LoraxStage::Submission => {
-                event.stage = LoraxStage::Voting;
-                event.current_trees = event.tree_submissions.values().cloned().collect();
+                if event.tree_submissions.is_empty() {
+                    event.stage = LoraxStage::Inactive;
+                } else {
+                    event.stage = LoraxStage::Voting;
+                    event.current_trees = event.tree_submissions.values().cloned().collect();
+                }
                 event.start_time = get_current_timestamp();
             }
             LoraxStage::Voting => {
-                event.stage = LoraxStage::Completed;
+                if event.tree_votes.is_empty() {
+                    event.stage = LoraxStage::Inactive;
+                } else {
+                    let winners = self.get_winners(event);
+                    // Check for ties
+                    if winners.len() >= 2 && winners[0].1 == winners[1].1 {
+                        event.stage = LoraxStage::Tiebreaker(1);
+                        event.current_trees = winners
+                            .iter()
+                            .take_while(|(_, votes)| votes == &winners[0].1)
+                            .map(|(tree, _)| tree.clone())
+                            .collect();
+                    } else {
+                        event.stage = LoraxStage::Completed;
+                        event.current_trees = winners.into_iter().map(|(tree, _)| tree).collect();
+                        self.handle_winner_roles(ctx, event).await;
+                    }
+                }
                 event.start_time = get_current_timestamp();
-
-                let winners = self.get_winners(event);
-                event.current_trees = winners.into_iter().map(|(tree, _)| tree).collect();
-
-                self.handle_winner_roles(ctx, event).await;
+                event.tree_votes.clear(); // Reset votes for next stage
             }
             LoraxStage::Tiebreaker(round) => {
                 if round >= 3 {
@@ -152,6 +171,14 @@ impl LoraxEventTask {
             }
             LoraxStage::Inactive => return,
         }
+
+        tracing::info!(
+            "Advanced Lorax event from {:?} to {:?} for guild {}",
+            old_stage,
+            event.stage,
+            self.guild_id
+        );
+
         if let Err(e) = self.db.update_event(self.guild_id, event.clone()).await {
             tracing::error!("Failed to update event stage: {}", e);
         }
@@ -195,122 +222,140 @@ impl LoraxEventTask {
     }
 
     pub async fn send_stage_message(&mut self, ctx: &Context, event: &mut LoraxEvent) {
-        if let Some(channel_id) = event.settings.lorax_channel {
-            let role_ping = event
-                .settings
-                .lorax_role
-                .map(|id| format!("<@&{}> ", id))
-                .unwrap_or_default();
+        let channel_id = match event.settings.lorax_channel {
+            Some(id) => id,
+            None => {
+                tracing::error!("No Lorax channel configured for guild {}", self.guild_id);
+                return;
+            }
+        };
 
-            let sample_trees = vec!["Willow", "Sequoia", "Maple", "Oak", "Pine"];
-            let random_tree = sample_trees
-                .choose(&mut rand::thread_rng())
-                .unwrap_or(&"Tree");
+        // Validate channel exists and is accessible
+        let channel = match ctx.http.get_channel(ChannelId::new(channel_id)).await {
+            Ok(channel) => channel,
+            Err(e) => {
+                tracing::error!("Failed to fetch channel {}: {}", channel_id, e);
+                return;
+            }
+        };
 
-            let content = match event.stage {
-                LoraxStage::Submission => format!(
-                    "{role_ping}🌳 Help us name our new node! Submit a tree name like '{random_tree}' with `/lorax submit`.\nSubmissions close <t:{}:R>",
-                    event.get_stage_end_timestamp(self.calculate_stage_duration(event))
-                ),
-                LoraxStage::Voting => {
-                    if event.tree_submissions.is_empty() {
-                        event.stage = LoraxStage::Inactive;
-                        format!("{role_ping}😕 No tree names were submitted.")
-                    } else {
-                        format!(
-                            "{role_ping}🗳️ Time to vote! Use `/lorax vote` to choose the new node's name.\nVoting ends <t:{}:R>",
-                            event.get_stage_end_timestamp(self.calculate_stage_duration(event))
-                        )
-                    }
-                },
-                LoraxStage::Tiebreaker(round) => format!(
-                    "{role_ping}⚖️ Tiebreaker Round {round}! Vote again with `/lorax vote`.\nEnds <t:{}:R>",
-                    event.get_stage_end_timestamp(self.calculate_stage_duration(event))
-                ),
-                LoraxStage::Completed => {
-                    let mut podium = String::new();
-                    let total_entries = event.current_trees.len();
-                    for (i, tree) in event.current_trees.iter().take(3).enumerate() {
-                        match i {
-                            0 => podium.push_str(&format!("🥇 **{}**", tree)),
-                            1 => podium.push_str(&format!("\n🥈 **{}**", tree)),
-                            2 => podium.push_str(&format!("\n🥉 **{}**", tree)),
-                            _ => unreachable!(),
-                        }
-                        if let Some(submitter_id) = event.get_tree_submitter(tree) {
-                            podium.push_str(&format!(" (by <@{}>)", submitter_id));
-                        }
-                    }
-                    if total_entries > 3 {
-                        podium.push_str(&format!("\n\nand {} runner ups...", total_entries - 3));
-                    }
+        let text_channel = match channel.guild() {
+            Some(tc) => tc,
+            None => {
+                tracing::error!("Channel {} is not a guild text channel", channel_id);
+                return;
+            }
+        };
 
-                    let winner_name = event.current_trees.first()
-                        .map(|s| s.as_str())
-                        .unwrap_or("Unknown");
+        let role_ping = event
+            .settings
+            .lorax_role
+            .map(|id| format!("<@&{}> ", id))
+            .unwrap_or_default();
 
+        let sample_trees = vec!["Willow", "Sequoia", "Maple", "Oak", "Pine"];
+        let random_tree = sample_trees
+            .choose(&mut rand::thread_rng())
+            .unwrap_or(&"Tree");
+
+        let content = match event.stage {
+            LoraxStage::Submission => format!(
+                "{role_ping}🌳 Help us name our new node! Submit a tree name like '{random_tree}' with `/lorax submit`.\nSubmissions close <t:{}:R>",
+                event.get_stage_end_timestamp(self.calculate_stage_duration(event))
+            ),
+            LoraxStage::Voting => {
+                if event.tree_submissions.is_empty() {
+                    event.stage = LoraxStage::Inactive;
+                    format!("{role_ping}😕 No tree names were submitted.")
+                } else {
                     format!(
-                        "{role_ping}🎉 **Node Naming Results**\nOur new node will be named **{winner_name}**!\n\n{podium}\n\n🌲 **Event Stats**\n- Names Submitted: {}\n- Votes Cast: {}",
-                        event.tree_submissions.len(),
-                        event.tree_votes.len()
+                        "{role_ping}🗳️ Time to vote! Use `/lorax vote` to choose the new node's name.\nVoting ends <t:{}:R>",
+                        event.get_stage_end_timestamp(self.calculate_stage_duration(event))
                     )
-                },
-                LoraxStage::Inactive => return,
-            };
+                }
+            },
+            LoraxStage::Tiebreaker(round) => format!(
+                "{role_ping}⚖️ Tiebreaker Round {round}! Vote again with `/lorax vote`.\nEnds <t:{}:R>",
+                event.get_stage_end_timestamp(self.calculate_stage_duration(event))
+            ),
+            LoraxStage::Completed => {
+                let mut podium = String::new();
+                let total_entries = event.current_trees.len();
+                for (i, tree) in event.current_trees.iter().take(3).enumerate() {
+                    match i {
+                        0 => podium.push_str(&format!("🥇 **{}**", tree)),
+                        1 => podium.push_str(&format!("\n🥈 **{}**", tree)),
+                        2 => podium.push_str(&format!("\n🥉 **{}**", tree)),
+                        _ => unreachable!(),
+                    }
+                    if let Some(submitter_id) = event.get_tree_submitter(tree) {
+                        podium.push_str(&format!(" (by <@{}>)", submitter_id));
+                    }
+                }
+                if total_entries > 3 {
+                    podium.push_str(&format!("\n\nand {} runner ups...", total_entries - 3));
+                }
 
-            if let Ok(channel) = ctx.http.get_channel(ChannelId::new(channel_id)).await {
-                if let Some(text_channel) = channel.guild() {
-                    let msg = CreateMessage::default().content(&content).allowed_mentions(
-                        CreateAllowedMentions::new()
-                            .roles(vec![event.settings.lorax_role.unwrap_or_default()]),
-                    );
-                    if let Ok(message) = text_channel.send_message(ctx, msg).await {
-                        match event.stage {
-                            LoraxStage::Submission => {
-                                event.stage_message_id = Some(message.id.get())
-                            }
-                            LoraxStage::Voting => {
-                                event.voting_message_id = Some(message.id.get());
+                let winner_name = event.current_trees.first()
+                    .map(|s| s.as_str())
+                    .unwrap_or("Unknown");
 
-                                if let Ok(thread) = text_channel
-                                    .create_thread_from_message(
+                format!(
+                    "{role_ping}🎉 **Node Naming Results**\nOur new node will be named **{winner_name}**!\n\n{podium}\n\n🌲 **Event Stats**\n- Names Submitted: {}\n- Votes Cast: {}",
+                    event.tree_submissions.len(),
+                    event.tree_votes.len()
+                )
+            },
+            LoraxStage::Inactive => return,
+        };
+
+        if let Ok(message) = text_channel.send_message(ctx, CreateMessage::default().content(&content).allowed_mentions(
+            CreateAllowedMentions::new()
+                .roles(vec![event.settings.lorax_role.unwrap_or_default()]),
+        )).await {
+            match event.stage {
+                LoraxStage::Submission => {
+                    event.stage_message_id = Some(message.id.get())
+                }
+                LoraxStage::Voting => {
+                    event.voting_message_id = Some(message.id.get());
+
+                    if let Ok(thread) = text_channel
+                        .create_thread_from_message(
+                            ctx,
+                            message.id,
+                            CreateThread::new("Campaign Thread")
+                                .kind(ChannelType::PublicThread)
+                                .auto_archive_duration(AutoArchiveDuration::OneDay),
+                        )
+                        .await
+                    {
+                        event.campaign_thread_id = Some(thread.id.get());
+                        let welcome_msg = CreateMessage::default()
+                            .content("🎭 Welcome to the campaign thread! Tree submitters can campaign for their entries here. Good luck!");
+                        let _ = thread.send_message(ctx, welcome_msg).await;
+                    }
+                }
+                LoraxStage::Completed => {
+                    if let Some(thread_id) = event.campaign_thread_id {
+                        if let Ok(thread) =
+                            ctx.http.get_channel(ChannelId::new(thread_id)).await
+                        {
+                            if let Some(mut thread) = thread.guild() {
+                                let _ = thread
+                                    .edit_thread(
                                         ctx,
-                                        message.id,
-                                        CreateThread::new("Campaign Thread")
-                                            .kind(ChannelType::PublicThread)
-                                            .auto_archive_duration(AutoArchiveDuration::OneDay),
+                                        EditThread::new().locked(true).archived(true),
                                     )
-                                    .await
-                                {
-                                    event.campaign_thread_id = Some(thread.id.get());
-                                    let welcome_msg = CreateMessage::default()
-                                        .content("🎭 Welcome to the campaign thread! Tree submitters can campaign for their entries here. Good luck!");
-                                    let _ = thread.send_message(ctx, welcome_msg).await;
-                                }
+                                    .await;
                             }
-                            LoraxStage::Completed => {
-                                if let Some(thread_id) = event.campaign_thread_id {
-                                    if let Ok(thread) =
-                                        ctx.http.get_channel(ChannelId::new(thread_id)).await
-                                    {
-                                        if let Some(mut thread) = thread.guild() {
-                                            let _ = thread
-                                                .edit_thread(
-                                                    ctx,
-                                                    EditThread::new().locked(true).archived(true),
-                                                )
-                                                .await;
-                                        }
-                                    }
-                                }
-                            }
-                            LoraxStage::Tiebreaker(_) => {
-                                event.tiebreaker_message_id = Some(message.id.get())
-                            }
-                            _ => {}
                         }
                     }
                 }
+                LoraxStage::Tiebreaker(_) => {
+                    event.tiebreaker_message_id = Some(message.id.get())
+                }
+                _ => {}
             }
         }
     }

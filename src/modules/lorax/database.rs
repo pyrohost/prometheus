@@ -95,14 +95,36 @@ impl LoraxHandler {
         tree: String,
         user_id: u64,
     ) -> Result<(bool, Option<String>), String> {
+        if tree.trim().is_empty() {
+            return Err("Tree name cannot be empty".to_string());
+        }
+
+        if tree.len() > 32 {
+            return Err("Tree name cannot be longer than 32 characters".to_string());
+        }
+
+        let tree = tree.trim().to_owned();
+
         self.transaction(|db| {
-            if let Some(event) = db.events.get_mut(&guild_id) {
-                let is_update = event.tree_submissions.contains_key(&user_id);
-                let old_submission = event.tree_submissions.insert(user_id, tree);
-                Ok((is_update, old_submission))
-            } else {
-                Err("No active event".to_string())
+            let event = db.events.get_mut(&guild_id)
+                .ok_or("No active event")?;
+            
+            if !matches!(event.stage, LoraxStage::Submission) {
+                return Err("Submissions are not currently open".to_string());
             }
+
+            // Check for duplicate names
+            if event.tree_submissions.values().any(|t| t.eq_ignore_ascii_case(&tree)) {
+                return Err("That tree name has already been submitted".to_string());
+            }
+
+            if event.eliminated_trees.contains(&tree.to_lowercase()) {
+                return Err("That tree name has been disqualified".to_string());
+            }
+
+            let is_update = event.tree_submissions.contains_key(&user_id);
+            let old_submission = event.tree_submissions.insert(user_id, tree);
+            Ok((is_update, old_submission))
         })
         .await
         .map_err(|e| e.to_string())
@@ -115,13 +137,20 @@ impl LoraxHandler {
         user_id: u64,
     ) -> Result<bool, String> {
         self.transaction(|db| {
-            if let Some(event) = db.events.get_mut(&guild_id) {
-                let is_update = event.tree_votes.contains_key(&user_id);
-                event.tree_votes.insert(user_id, tree);
-                Ok(is_update)
-            } else {
-                Err("No active event".to_string())
+            let event = db.events.get_mut(&guild_id)
+                .ok_or("No active event")?;
+
+            if !matches!(event.stage, LoraxStage::Voting | LoraxStage::Tiebreaker(_)) {
+                return Err("Voting is not currently open".to_string());
             }
+
+            if !event.current_trees.iter().any(|t| t.eq_ignore_ascii_case(&tree)) {
+                return Err("Invalid tree selection".to_string());
+            }
+
+            let is_update = event.tree_votes.contains_key(&user_id);
+            event.tree_votes.insert(user_id, tree);
+            Ok(is_update)
         })
         .await
         .map_err(|e| e.to_string())

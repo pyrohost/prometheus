@@ -172,28 +172,6 @@ pub async fn durations(
         return Ok(());
     }
 
-    if let Some(mins) = submission {
-        if mins < 1 || mins > 1440 {
-            ctx.say("❌ Submission duration must be between 1 and 1440 minutes.")
-                .await?;
-            return Ok(());
-        }
-    }
-    if let Some(mins) = voting {
-        if mins < 1 || mins > 1440 {
-            ctx.say("❌ Voting duration must be between 1 and 1440 minutes.")
-                .await?;
-            return Ok(());
-        }
-    }
-    if let Some(mins) = tiebreaker {
-        if mins < 1 || mins > 1440 {
-            ctx.say("❌ Tiebreaker duration must be between 1 and 1440 minutes.")
-                .await?;
-            return Ok(());
-        }
-    }
-
     match ctx
         .data()
         .dbs

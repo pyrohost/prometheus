@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use crate::modules::lorax::database::LoraxEvent;
 use crate::modules::lorax::{database::LoraxStage, task::LoraxEventTask};
 use crate::{Context, Error};
 use poise::command;
@@ -60,6 +61,42 @@ pub async fn end(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
+async fn handle_winner_roles(
+    ctx: &serenity::Context,
+    guild_id: u64,
+    event: &LoraxEvent,
+    winner_tree: &str,
+) -> Result<(), Error> {
+    let settings = &event.settings;
+    
+    // Get winner and previous winner roles
+    if let (Some(winner_role_id), Some(alumni_role_id)) = (settings.winner_role, settings.alumni_role) {
+        let winner_role = serenity::RoleId::from(winner_role_id);
+        let alumni_role = serenity::RoleId::from(alumni_role_id);
+
+        // Move current winners to alumni
+        if let Ok(guild) = ctx.http.get_guild(guild_id.into()).await {
+            if let Ok(members) = guild.members(ctx, None, None).await {
+                for member in members {
+                    if member.roles.contains(&winner_role) {
+                        let _ = member.remove_role(ctx, winner_role).await;
+                        let _ = member.add_role(ctx, alumni_role).await;
+                    }
+                }
+
+                // Assign winner role to new winner
+                if let Some(winner_id) = event.get_tree_submitter(winner_tree) {
+                    if let Ok(winner) = guild.member(ctx, winner_id).await {
+                        let _ = winner.add_role(ctx, winner_role).await;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Skip to the next event stage
 #[command(slash_command, guild_only, required_permissions = "MANAGE_GUILD")]
 pub async fn force_advance(ctx: Context<'_>) -> Result<(), Error> {
@@ -81,6 +118,13 @@ pub async fn force_advance(ctx: Context<'_>) -> Result<(), Error> {
 
     let mut updated_event = event.clone();
     let mut lorax_task = LoraxEventTask::new(guild_id, Arc::new(ctx.data().dbs.lorax.clone()));
+
+    if matches!(updated_event.stage, LoraxStage::Voting) {
+        // Handle role assignments before advancing
+        if let Some(winner_tree) = updated_event.get_winner() {
+            handle_winner_roles(ctx.serenity_context(), guild_id, &updated_event, &winner_tree).await?;
+        }
+    }
 
     lorax_task
         .advance_stage(ctx.serenity_context(), &mut updated_event)

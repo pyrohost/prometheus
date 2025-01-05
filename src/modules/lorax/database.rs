@@ -74,6 +74,23 @@ impl LoraxEvent {
             .find(|(_, name)| name.as_str() == tree_name)
             .map(|(uid, _)| *uid)
     }
+
+    pub fn get_winner(&self) -> Option<String> {
+        let mut vote_counts: std::collections::HashMap<&String, usize> = std::collections::HashMap::new();
+        
+        for voted_tree in self.tree_votes.values() {
+            *vote_counts.entry(voted_tree).or_insert(0) += 1;
+        }
+
+        if vote_counts.is_empty() {
+            return None;
+        }
+
+        vote_counts
+            .into_iter()
+            .max_by_key(|&(_, count)| count)
+            .map(|(tree, _)| tree.clone())
+    }
 }
 
 #[derive(Default, Serialize, Deserialize, Clone, Debug)]

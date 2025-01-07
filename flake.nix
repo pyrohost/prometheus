@@ -36,7 +36,7 @@
             pkgs.openssl
             pkgs.opus
           ] ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
-            pkks.libiconv
+            pkgs.libiconv
             pkgs.darwin.apple_sdk.frameworks.Security
             pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
           ];

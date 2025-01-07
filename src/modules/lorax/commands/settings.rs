@@ -17,7 +17,7 @@ pub async fn config(_ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// Set the announcement channel
-#[command(slash_command, guild_only)]
+#[command(slash_command, guild_only, required_permissions = "MANAGE_GUILD")]
 pub async fn channel(
     ctx: Context<'_>,
     #[description = "Channel for Lorax announcements"] channel: serenity::Channel,
@@ -85,7 +85,7 @@ pub async fn channel(
 }
 
 /// Configure role settings
-#[command(slash_command, guild_only)]
+#[command(slash_command, guild_only, required_permissions = "MANAGE_GUILD")]
 pub async fn roles(
     ctx: Context<'_>,
     #[description = "Role to mention for events"] event_role: Option<serenity::Role>,
@@ -157,7 +157,7 @@ pub async fn roles(
 }
 
 /// Set event phase durations
-#[command(slash_command, guild_only)]
+#[command(slash_command, guild_only, required_permissions = "MANAGE_GUILD")]
 pub async fn durations(
     ctx: Context<'_>,
     #[description = "Minutes for submissions"] submission: Option<u64>,
@@ -205,7 +205,7 @@ pub async fn durations(
 }
 
 /// View current Lorax settings
-#[command(slash_command, guild_only)]
+#[command(slash_command, guild_only, required_permissions = "MANAGE_GUILD")]
 pub async fn view(ctx: Context<'_>) -> Result<(), Error> {
     let guild_id = ctx.guild_id().unwrap().get();
 

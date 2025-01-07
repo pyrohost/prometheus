@@ -3,12 +3,13 @@ use databases::Databases;
 use modules::{
     lorax::{commands::lorax, task::LoraxEventTask},
     modrinth::modrinth,
+    recording::recording,
     stats::{stats, task::StatsTask},
-    system::events::ReadyHandler,
     testing::{task::TestingTask, testing},
     utils::server_costs,
 };
 use poise::serenity_prelude::{self as serenity, CreateAllowedMentions};
+use songbird::SerenityInit;
 use std::sync::Arc;
 use tasks::TaskManager;
 use tracing::{error, info, trace};
@@ -80,12 +81,20 @@ async fn main() {
     info!("starting prometheus");
 
     let token = std::env::var("DISCORD_TOKEN").expect("missing DISCORD_TOKEN");
-    let intents = serenity::GatewayIntents::non_privileged();
+    let intents = serenity::GatewayIntents::all();
 
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions::<Data, Error> {
             allowed_mentions: Some(CreateAllowedMentions::new().empty_roles().empty_users()),
-            commands: vec![register(), lorax(), stats(), testing(), modrinth(), server_costs()],
+            commands: vec![
+                register(),
+                lorax(),
+                stats(),
+                testing(),
+                modrinth(),
+                server_costs(),
+                recording(),
+            ],
             pre_command: |ctx| {
                 Box::pin(async move {
                     trace!(
@@ -143,23 +152,27 @@ async fn main() {
                 let event_manager = Arc::new(events::EventManager::new());
                 let master_key = std::env::var("MASTER_KEY").expect("missing MASTER_KEY");
 
-                event_manager.add_handler(ReadyHandler).await;
-
-                let data = Data {
-                    dbs,
-                    task_manager,
-                    event_manager,
+                let data = Arc::new(Data {
+                    dbs: dbs.clone(),
+                    task_manager: task_manager.clone(),
+                    event_manager: event_manager.clone(),
                     config: Config { master_key },
-                };
+                });
+
+                event_manager.init(&data).await;
                 data.init_tasks(ctx).await;
 
-                Ok(data)
+                Ok((*data).clone())
             })
         })
         .build();
 
+    let songbird = songbird::Songbird::serenity();
+    songbird.set_config(songbird::Config::default().decode_mode(songbird::driver::DecodeMode::Decode));
+
     let client = serenity::ClientBuilder::new(token, intents)
         .framework(framework)
+        .register_songbird_with(songbird)
         .await;
 
     client.unwrap().start().await.unwrap();

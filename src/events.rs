@@ -2,7 +2,9 @@ use async_trait::async_trait;
 use futures::stream::{FuturesUnordered, StreamExt};
 use poise::serenity_prelude::{Context, FullEvent};
 use std::fmt::Debug;
+use std::sync::Arc;
 use tokio::sync::Mutex;
+use crate::{Data, modules::recording::handler::RecordingHandler};
 
 #[async_trait]
 pub trait EventHandler: Send + Sync + Debug {
@@ -31,6 +33,11 @@ impl EventManager {
         Self {
             handlers: Mutex::new(Vec::new()),
         }
+    }
+
+    pub async fn init(&self, data: &Arc<Data>) {
+        let mut handlers = self.handlers.lock().await;
+        handlers.push(Box::new(RecordingHandler::new(data.dbs.recording.clone())));
     }
 
     pub async fn add_handler(&self, handler: impl EventHandler + 'static) {

@@ -53,9 +53,8 @@
         pyrobotModule = { config, lib, pkgs, ... }: {
           options.services.pyrobot = {
             enable = lib.mkEnableOption "Pyro Discord Bot";
-            token = lib.mkOption {
-              type = lib.types.str;
-              description = "Discord bot token";
+            environmentFiles = lib.mkOption {
+              type = lib.types.listOf lib.types.path;
             };
             workingDir = lib.mkOption {
               type = lib.types.str;
@@ -71,10 +70,6 @@
               type = lib.types.str;
               default = "pyrobot";
               description = "Group under which the bot runs";
-            };
-            masterKey = lib.mkOption {
-              type = lib.types.str;
-              description = "Master key for administrative commands";
             };
             rustLog = lib.mkOption {
               type = lib.types.str;
@@ -118,11 +113,7 @@
                   config.services.pyrobot.workingDir 
                 ];
                 PrivateUsers = true;
-                Environment = [
-                  "DISCORD_TOKEN=${config.services.pyrobot.token}"
-                  "MASTER_KEY=${config.services.pyrobot.masterKey}"
-                  "RUST_LOG=${config.services.pyrobot.rustLog}"
-                ];
+                EnvironmentFile = config.services.pyrobot.environmentFiles;
               };
             };
           };
